@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
-#define VERSION "1.3.1"
+#define VERSION "1.3.3"
 
 #include "Arduino.h"
 #include <ESP8266WiFi.h>
@@ -37,15 +37,20 @@ SOFTWARE.
 #include "Ntp.h"
 #include <AsyncMqttClient.h>
 #include <Bounce2.h>
+#include "magicnumbers.h"
 
  // #define DEBUG
+
+int numRelays=1;
 
 #ifdef OFFICIALBOARD
 
 #include <Wiegand.h>
 
 WIEGAND wg;
-int relayPin = 13;
+int relayPin[MAX_NUM_RELAYS] = {13};
+bool activateRelay [MAX_NUM_RELAYS]= {false};
+bool deactivateRelay [MAX_NUM_RELAYS]= {false};
 
 #endif
 
@@ -63,9 +68,19 @@ RFID_Reader RFIDr;
 
 int rfidss;
 int readertype;
-int relayPin;
+
+// relay specific variables
+
+int relayPin[MAX_NUM_RELAYS];
+bool activateRelay [MAX_NUM_RELAYS]= {false,false,false,false};
+bool deactivateRelay [MAX_NUM_RELAYS]= {false,false,false,false};
 
 #endif
+
+int lockType[MAX_NUM_RELAYS];
+int relayType[MAX_NUM_RELAYS];
+unsigned long activateTime[MAX_NUM_RELAYS];
+
 
 // these are from vendors
 #include "webh/glyphicons-halflings-regular.woff.gz.h"
@@ -86,7 +101,7 @@ extern "C" {
 NtpClient NTP;
 AsyncMqttClient mqttClient;
 Ticker mqttReconnectTimer;
-WiFiEventHandler wifiDisconnectHandler, wifiConnectHandler;
+WiFiEventHandler wifiDisconnectHandler, wifiConnectHandler, wifiOnStationModeGotIPHandler;
 Bounce openLockButton;
 
 AsyncWebServer server(80);
@@ -112,11 +127,11 @@ unsigned long previousMillis = 0;
 unsigned long previousLoopMillis = 0;
 unsigned long currentMillis = 0;
 unsigned long cooldown = 0;
+unsigned long keyTimer = 0;
+String currentInput = "";
 unsigned long deltaTime = 0;
 unsigned long uptime = 0;
 bool shouldReboot = false;
-bool activateRelay = false;
-bool deactivateRelay = false;
 bool inAPMode = false;
 bool isWifiConnected = false;
 unsigned long autoRestartIntervalSeconds = 0;
@@ -137,9 +152,6 @@ char *muser = NULL;
 char *mpas = NULL;
 int mport;
 
-int lockType;
-int relayType;
-unsigned long activateTime;
 int timeZone;
 
 unsigned long nextbeat = 0;
@@ -216,6 +228,8 @@ void ICACHE_FLASH_ATTR setup()
 	}
 	wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
 	wifiConnectHandler = WiFi.onStationModeConnected(onWifiConnect);
+	wifiOnStationModeGotIPHandler = WiFi.onStationModeGotIP(onWifiGotIP);
+	
 	configMode = loadConfiguration();
 	if (!configMode)
 	{
@@ -243,7 +257,7 @@ void ICACHE_RAM_ATTR loop()
 		Serial.println("Button has been pressed");
 #endif
 		writeLatest("", "(used open/close button)", 1);
-		activateRelay = true;
+		activateRelay[0] = true;
 	}
 
 	if (wifipin != 255 && configMode && !wmode)
@@ -274,62 +288,64 @@ void ICACHE_RAM_ATTR loop()
 	}
 
 	// Continuous relay mode
-	if (lockType == 1)
-	{
-		if (activateRelay)
+
+	for (int currentRelay = 0; currentRelay < numRelays ; currentRelay++){
+	  if (lockType[currentRelay] == LOCKTYPE_CONTINUOUS)
+		{
+		if (activateRelay[currentRelay])
 		{
 			// currently OFF, need to switch ON
-			if (digitalRead(relayPin) == !relayType)
+			if (digitalRead(relayPin[currentRelay]) == !relayType[currentRelay])
 			{
 #ifdef DEBUG
 				Serial.print("mili : ");
 				Serial.println(millis());
-				Serial.println("activating relay now");
+				Serial.printf("activating relay %d now\n",currentRelay);
 #endif
-				digitalWrite(relayPin, relayType);
+				digitalWrite(relayPin[currentRelay], relayType[currentRelay]);
 			}
 			else	// currently ON, need to switch OFF
 			{
 #ifdef DEBUG
 				Serial.print("mili : ");
 				Serial.println(millis());
-				Serial.println("deactivating relay now");
+				Serial.printf("deactivating relay %d now\n",currentRelay);
 #endif
-				digitalWrite(relayPin, !relayType);
+				digitalWrite(relayPin[currentRelay], !relayType[currentRelay]);
 			}
-			activateRelay = false;
+			activateRelay[currentRelay] = false;
 		}
-	}
-	else if (lockType == 0)	// momentary relay mode
-	{
-		if (activateRelay)
+	  }
+	  else if (lockType[currentRelay] == LOCKTYPE_MOMENTARY)	// momentary relay mode
+	  {
+		if (activateRelay[currentRelay])
 		{
 #ifdef DEBUG
 			Serial.print("mili : ");
 			Serial.println(millis());
-			Serial.println("activating relay now");
+			Serial.printf("activating relay %d now\n",currentRelay);
 #endif
-			digitalWrite(relayPin, relayType);
+			digitalWrite(relayPin[currentRelay], relayType[currentRelay]);
 			previousMillis = millis();
-			activateRelay = false;
-			deactivateRelay = true;
+			activateRelay[currentRelay] = false;
+			deactivateRelay[currentRelay] = true;
 		}
-		else if ((currentMillis - previousMillis >= activateTime) && (deactivateRelay))
+		else if ((currentMillis - previousMillis >= activateTime[currentRelay]) && (deactivateRelay[currentRelay]))
 		{
 #ifdef DEBUG
 			Serial.println(currentMillis);
 			Serial.println(previousMillis);
-			Serial.println(activateTime);
-			Serial.println(activateRelay);
+			Serial.println(activateTime[currentRelay]);
+			Serial.println(activateRelay[currentRelay]);
 			Serial.println("deactivate relay after this");
 			Serial.print("mili : ");
 			Serial.println(millis());
 #endif
-			digitalWrite(relayPin, !relayType);
-			deactivateRelay = false;
+			digitalWrite(relayPin[currentRelay], !relayType[currentRelay]);
+			deactivateRelay[currentRelay] = false;
 		}
+	  }
 	}
-
 	if (formatreq)
 	{
 #ifdef DEBUG
@@ -408,4 +424,15 @@ void ICACHE_RAM_ATTR loop()
 			}
 		}
 	}
+	// Keep an eye on timeout waiting for keypress
+	// Clear code and timer when timeout is reached
+	if (keyTimer > 0 && millis() - keyTimer >= KEYBOARD_TIMEOUT_MILIS)
+	{
+#ifdef DEBUG
+		Serial.println("[ INFO ] Keycode timeout");
+#endif
+		keyTimer = 0;
+		currentInput = "";
+	}
+
 }

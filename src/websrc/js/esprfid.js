@@ -8,6 +8,11 @@ var data = [];
 var ajaxobj;
 var isOfficialBoard = false;
 
+var maxNumRelays=4;
+var numRelays=1;
+
+var theCurrentLogFile ="";
+
 var config = {
     "command": "configfile",
     "network": {
@@ -52,6 +57,12 @@ var config = {
         "pswd": "",
         "syncrate": 180,
         "mqttlog": 0
+    },
+    "logmaintenance": {
+      "enabled": 0,
+      "rolloverkb": "10",
+      "maxlogfilesnumber": 4,
+      "spiffwatch": 0
     },
     "ntp": {
         "server": "pool.ntp.org",
@@ -117,12 +128,14 @@ function handleReader() {
   }
 }
 
-function handleLock() {
-  var lType = parseInt(document.getElementById("lockType").value);
+function handleLock(xnum) {
+  var xstr="";
+  if (xnum>1) {xstr="" + xnum}
+  var lType = parseInt(document.getElementById("lockType"+xstr).value);
   if (lType === 0) {
-    document.getElementById("activateTimeForm").style.display = "block";
+    document.getElementById("activateTimeForm"+xstr).style.display = "block";
   } else if (lType === 1) {
-    document.getElementById("activateTimeForm").style.display = "none";
+    document.getElementById("activateTimeForm"+xstr).style.display = "none";
   }
 }
 
@@ -149,13 +162,27 @@ function listhardware() {
     document.getElementById("gpioss").value = config.hardware.sspin;
     document.getElementById("gain").value = config.hardware.rfidgain;
     document.getElementById("gpiorly").value = config.hardware.rpin;
+    document.getElementById("numrlys").value = numRelays;
+    updateRelayForm();
+    updateUserModalForm();
+
+
+    for (var i = 2; i<=numRelays; i++)
+    {
+
+      document.getElementById("gpiorly"+i).value = config.hardware["relay"+i].rpin;
+      document.getElementById("lockType"+i).value = config.hardware["relay"+i].ltype;
+      document.getElementById("typerly"+i).value = config.hardware["relay"+i].rtype;
+      document.getElementById("delay"+i).value = config.hardware["relay"+i].rtime;
+    }  
   }
   handleReader();
   handleLock();
 }
 
 function listlog() {
-  websock.send("{\"command\":\"getlatestlog\", \"page\":" + page + "}");
+//  websock.send("{\"command\":\"getlatestlog\", \"page\":" + page + "}");
+  websock.send("{\"command\":\"getlatestlog\", \"page\":" + page + ", \"filename\":\"" + theCurrentLogFile +"\"}");
 }
 
 function listntp() {
@@ -197,6 +224,15 @@ function savehardware() {
   config.hardware.wifipin = parseInt(document.getElementById("wifipin").value);
   config.hardware.doorstatpin = parseInt(document.getElementById("doorstatpin").value);
   config.hardware.openlockpin = parseInt(document.getElementById("openlockpin").value);
+  config.hardware["numrelays"] = numRelays; 
+
+  for (var i = 2; i<=numRelays; i++)
+  {
+    config.hardware["relay"+i].rpin = document.getElementById("gpiorly"+i).value;
+    config.hardware["relay"+i].ltype = document.getElementById("lockType"+i).value;
+    config.hardware["relay"+i].rtype = document.getElementById("typerly"+i).value;
+    config.hardware["relay"+i].rtime = document.getElementById("delay"+i).value;
+  }  
   uncommited();
 }
 
@@ -460,6 +496,60 @@ function listmqtt() {
    
 }
 
+function savelogsettings() {
+  config.logmaintenance.enabled = 0;
+  if (parseInt($("input[name=\"logmaintenanceenabled\"]:checked").val()) === 1) {
+      config.logmaintenance.enabled = 1;
+  }
+  else{
+    config.logmaintenance.enabled = 0;
+  } 
+  config.logmaintenance.rolloverkb     = document.getElementById("rolloverkb").value;
+  config.logmaintenance.maxlogfilesnumber     = parseInt(document.getElementById("maxlogfilesnumber").value);
+  config.logmaintenance.spiffwatch = 0;
+  if (parseInt($("input[name=\"spiffwatch\"]:checked").val()) === 1) {
+      config.logmaintenance.spiffwatch = 1;
+  }
+  else{
+      config.logmaintenance.spiffwatch = 0;
+  } 
+  uncommited();
+}
+
+function listlogsettings() {
+
+  // downstream compatibility
+
+ if (!(config.hasOwnProperty("logmaintenance"))) 
+  {
+    logmaintenanceJson =
+    { 
+      "enabled": 0,
+      "rolloverkb": "10",
+      "maxlogfilesnumber": 5,
+      "spiffwatch": 0
+    };
+
+    config["logmaintenance"] = logmaintenanceJson; 
+  }
+
+
+  if (config.logmaintenance.enabled === 1) {
+      $("input[name=\"logmaintenanceenabled\"][value=\"1\"]").prop("checked", true);
+  }
+  document.getElementById("rolloverkb").value = config.logmaintenance.rolloverkb;
+  document.getElementById("maxlogfilesnumber").value = config.logmaintenance.maxlogfilesnumber;
+  if (config.logmaintenance.spiffwatch === 1) {
+      $("input[name=\"spiffwatch\"][value=\"1\"]").prop("checked", true);
+  }
+ 
+}
+function getFileList() {
+    websock.send("{\"command\":\"listfiles\", \"page\":" + page + "}");
+}
+
+
+
 function listBSSID() {
   var select = document.getElementById("ssid");
   document.getElementById("wifibssid").value = select.options[select.selectedIndex].bssidvalue;
@@ -496,7 +586,7 @@ function getUsers() {
 }
 
 function getEvents() {
-  websock.send("{\"command\":\"geteventlog\", \"page\":" + page + "}");
+  websock.send("{\"command\":\"geteventlog\", \"page\":" + page + ", \"filename\":\"" + theCurrentLogFile +"\"}");
 }
 
 function isVisible(e) {
@@ -530,6 +620,9 @@ function getnextpage(mode) {
     var commandtosend = {};
     commandtosend.command = mode;
     commandtosend.page = page;
+    if ((mode === "geteventlog") || (mode === "getlatestlog")) { 
+      commandtosend.filename = theCurrentLogFile;
+    }
     websock.send(JSON.stringify(commandtosend));
   }
 }
@@ -538,8 +631,8 @@ function builddata(obj) {
   data = data.concat(obj.list);
 }
 
-function testRelay() {
-  websock.send("{\"command\":\"testrelay\"}");
+function testRelay(xnum) {
+  websock.send("{\"command\":\"testrelay" + xnum + "\"}");
 }
 
 function colorStatusbar(ref) {
@@ -600,6 +693,14 @@ function getContent(contentname) {
         case "#hardwarecontent":
           listhardware();
           break;
+        case "#logsettingscontent":
+          listlogsettings();
+          break;
+        case "#logmaintenancecontent":
+          page = 1;
+          data = [];
+          getFileList();
+          break;
         case "#networkcontent":
           listnetwork();
           break;
@@ -640,19 +741,11 @@ function backupuser() {
 }
 
 function backupset() {
-  var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(config, null, 2));
-  var dlAnchorElem = document.getElementById("downloadSet");
-  dlAnchorElem.setAttribute("href", dataStr);
-  dlAnchorElem.setAttribute("download", "esp-rfid-settings.json");
-  dlAnchorElem.click();
+  saveLogfile(config,"downloadSet","esp-rfid-settings.json")
 }
 
 function piccBackup(obj) {
-  var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(obj, null, 2));
-  var dlAnchorElem = document.getElementById("downloadUser");
-  dlAnchorElem.setAttribute("href", dataStr);
-  dlAnchorElem.setAttribute("download", "esp-rfid-users.json");
-  dlAnchorElem.click();
+  saveLogfile(obj,"downloadUser","esp-rfid-users.json")
   backupstarted = false;
 }
 
@@ -752,15 +845,149 @@ function twoDigits(value) {
   return value;
 }
 
+function initFileListTable() {
+//  var newlist = [];
+//  for (var i = 0; i < data.length; i++) {
+//    var dup = JSON.parse(data[i]);
+//    newlist[i] = {};
+//    newlist[i].options = {};
+//    newlist[i].value = {};
+//    newlist[i].value = dup;
+//  }
+  jQuery(function($) {
+    window.FooTable.init("#spifftable", {
+      columns: [{
+          "name": "filename",
+          "title": "File Name",
+          "type": "text",
+          "sorted": true,
+          "direction": "ASC"
+        },
+        {
+          "name": "filename",
+          "title": "File Type",
+          "parser": function(value) 
+          {
+            if (value === "/latestlog.json") 
+            {
+              return("Main Access Log");
+            }
+            if (value === "/eventlog.json") 
+            {
+              return("Main Event Log");
+            }
+            if (value.indexOf("latestlog") >= 0)
+            {
+              return("Access Log");
+            }
+            if (value.indexOf("eventlog") >= 0)
+            {
+              return("Event Log");
+            }
+            return("Log file");
+          }
+        },
+        {
+          "name": "filesize",
+          "title": "Size (KB)",
+          "breakpoints": "xs sm",
+          "parser": function(value) {
+              value = value / 1024;
+              return (
+                value
+                  .toFixed(2) // always two decimal digits
+                  .replace('.', ',') // replace decimal point character with ,
+                  .replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1.') + ' KB'
+              ) // use . as a separator
+
+            }
+        },
+        {
+          "name":"filename",
+          "title":"Action",
+          "type":"text",
+          "formatter": function (value) 
+          {
+            var actions = $('<div/>')
+
+            var user_button = ($('<a/>', {'class':'btn btn-sm btn-default','filename':value})
+                .append($('<span/>', {'class': 'glyphicon glyphicon-trash'}))
+                .on("click", this, deletefile))
+                .appendTo(actions); 
+            var user_button = ($('<a/>', {'class':'btn btn-sm btn-default','filename':value})
+                .append($('<span/>', {'class': 'glyphicon glyphicon-search'}))
+                .on("click", this, viewfile))
+                .appendTo(actions);
+            var user_button = ($('<a/>', {'class':'btn btn-sm btn-default','filename':value})
+                .append($('<span/>', {'class': 'glyphicon glyphicon-resize-full'}))
+                .on("click", this, splitfile))
+                .appendTo(actions);
+            
+            if ( (value === "/latestlog.json") || (value === "/eventlog.json") )
+            {
+              var user_button = ($('<a/>', {'class':'btn btn-sm btn-default','filename':value})
+              .append($('<span/>', {'class': 'glyphicon glyphicon-refresh'}))
+              .on("click", this, rollover))
+              .appendTo(actions);
+            } 
+            
+
+
+            return actions;
+              //'<span class="glyphicon glyphicon-chevron-up" aria-hidden="true"></span></a>'
+          }
+      }
+
+      ],
+      rows: data
+    });
+    function rollover(e)
+    { 
+      websock.send("{\"command\":\"logMaintenance\" , \"action\":\"rollover\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
+    }
+    function splitfile(e)
+    { 
+      websock.send("{\"command\":\"logMaintenance\" , \"action\":\"split\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
+    }
+    function viewfile(e)
+    { 
+      theCurrentLogFile = this.getAttribute('filename');
+      if (theCurrentLogFile.indexOf("latestlog") >= 0)
+      {
+        getContent("#logcontent");
+      }
+      if (theCurrentLogFile.indexOf("eventlog") >= 0)
+      {
+        getContent("#eventcontent");
+      }
+
+    }
+    function deletefile(e)
+    { 
+      if (confirm("Really delete " + this.getAttribute('filename') + " ? This can not be undone!"))
+      {
+        websock.send("{\"command\":\"logMaintenance\" , \"action\":\"delete\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
+      }
+    }
+  });
+
+
+}
+
 function initEventTable() {
   var newlist = [];
   for (var i = 0; i < data.length; i++) {
-    var dup = JSON.parse(data[i]);
-    dup.uid = i;
     newlist[i] = {};
     newlist[i].options = {};
     newlist[i].value = {};
     newlist[i].value = dup;
+    try {
+      var dup = JSON.parse(data[i]);
+      dup.uid = i;
+    } catch(e)
+    {
+      var dup = {"uid":i,"type":"ERRO","src":"WEBIF","desc":"Error in logfile entry","data":data[i],"time":1}
+    }
     var c = dup.type;
     switch (c) {
       case "WARN":
@@ -835,10 +1062,15 @@ function initEventTable() {
 function initLatestLogTable() {
   var newlist = [];
   for (var i = 0; i < data.length; i++) {
-    var dup = JSON.parse(data[i]);
     newlist[i] = {};
     newlist[i].options = {};
     newlist[i].value = {};
+    try {
+      var dup = JSON.parse(data[i]);
+    } catch(e)
+    {
+      var dup = {"uid":0,"acctype":99,"timestamp":0,"username":"Error in logfile entry"}
+    }
     newlist[i].value = dup;
     var c = dup.acctype;
     switch (c) {
@@ -917,6 +1149,7 @@ function initLatestLogTable() {
 }
 
 function initUserTable() {
+  updateUserModalForm();
   jQuery(function($) {
     var $modal = $("#editor-modal"),
       $editor = $("#editor"),
@@ -934,8 +1167,56 @@ function initUserTable() {
           },
           {
             "name": "acctype",
-            "title": "Access Type",
+            "title": "Access Rl1",
             "breakpoints": "xs",
+            "parser": function(value) {
+              if (value === 1) {
+                return "Always";
+              } else if (value === 99) {
+                return "Admin";
+              } else if (value === 0) {
+                return "Disabled";
+              }
+              return value;
+            },
+          },
+          {
+            "name": "acctype2",
+            "title": "Access Rl2",
+            "breakpoints": "xs",
+            "visible": false,
+            "parser": function(value) {
+              if (value === 1) {
+                return "Always";
+              } else if (value === 99) {
+                return "Admin";
+              } else if (value === 0) {
+                return "Disabled";
+              }
+              return value;
+            },
+          },
+          {
+            "name": "acctype3",
+            "title": "Access Rl3",
+            "breakpoints": "xs",
+            "visible": false,
+            "parser": function(value) {
+              if (value === 1) {
+                return "Always";
+              } else if (value === 99) {
+                return "Admin";
+              } else if (value === 0) {
+                return "Disabled";
+              }
+              return value;
+            },
+          },
+          {
+            "name": "acctype4",
+            "title": "Access Rl4",
+            "breakpoints": "xs",
+            "visible": false,
             "parser": function(value) {
               if (value === 1) {
                 return "Always";
@@ -974,16 +1255,23 @@ function initUserTable() {
           editRow: function(row) {
             var acctypefinder;
             var values = row.val();
-            if (values.acctype === "Always") {
-              acctypefinder = 1;
-            } else if (values.acctype === "Admin") {
-              acctypefinder = 99;
-            } else if (values.acctype === "Disabled") {
-              acctypefinder = 0;
+
+            function giveAccType(xnum){
+              var xval;
+              if (xnum===1) xval = values.acctype;
+              if (xnum===2) xval = values.acctype2;
+              if (xnum===3) xval = values.acctype3;
+              if (xnum===4) xval = values.acctype4;
+              if (xval === "Always")  return 1;
+              if (xval === "Admin")  return 99;
+              if (xval === "Disabled") return 0;
             }
             $editor.find("#uid").val(values.uid);
             $editor.find("#username").val(values.username);
-            $editor.find("#acctype").val(acctypefinder);
+            $editor.find("#acctype").val(giveAccType(1));
+            $editor.find("#acctype2").val(giveAccType(2));
+            $editor.find("#acctype3").val(giveAccType(3));
+            $editor.find("#acctype4").val(giveAccType(4));
             $editor.find("#validuntil").val(values.validuntil);
             $modal.data("row", row);
             $editorTitle.text("Edit User # " + values.username);
@@ -1014,6 +1302,9 @@ function initUserTable() {
           uid: $editor.find("#uid").val(),
           username: $editor.find("#username").val(),
           acctype: parseInt($editor.find("#acctype").val()),
+          acctype2: parseInt($editor.find("#acctype2").val()),
+          acctype3: parseInt($editor.find("#acctype3").val()),
+          acctype4: parseInt($editor.find("#acctype4").val()),
           validuntil: (new Date($editor.find("#validuntil").val()).getTime() / 1000)
         };
       if (row instanceof window.FooTable.Row) {
@@ -1029,6 +1320,9 @@ function initUserTable() {
       datatosend.uid = $editor.find("#uid").val();
       datatosend.user = $editor.find("#username").val();
       datatosend.acctype = parseInt($editor.find("#acctype").val());
+      datatosend.acctype2 = parseInt($editor.find("#acctype2").val());
+      datatosend.acctype3 = parseInt($editor.find("#acctype3").val());
+      datatosend.acctype4 = parseInt($editor.find("#acctype4").val());
       var validuntil = $editor.find("#validuntil").val();
       var vuepoch = (new Date(validuntil).getTime() / 1000);
       datatosend.validuntil = vuepoch;
@@ -1036,6 +1330,23 @@ function initUserTable() {
       $modal.modal("hide");
     });
   });
+
+  ft=FooTable.get('#usertable');
+  
+
+  for (var i=2; i<= maxNumRelays; i++)
+  {
+    if (i<= numRelays) 
+    {
+      //FooTable.get('#usertable').draw();
+      ft.columns.get("acctype"+i).visible=true;
+    }
+    else
+    {
+      ft.columns.get("acctype"+i).visible=false;
+    }  
+    ft.draw();
+  }
 }
 
 function restartESP() {
@@ -1086,7 +1397,16 @@ function socketMessageListener(evt) {
         }
         builddata(obj);
         break;
-      case "gettime":
+      case "listfiles":
+        haspages = obj.haspages;
+        if (haspages === 0) {
+            document.getElementById("loading-img").style.display = "none";
+            initFileListTable();
+            break;
+          }
+          builddata(obj);
+          break;
+        case "gettime":
         utcSeconds = obj.epoch;
         timezone = obj.timezone;
         deviceTime();
@@ -1101,6 +1421,7 @@ function socketMessageListener(evt) {
         config = obj;
         if (!('wifipin' in config.hardware)) config.hardware.wifipin = 255;
         if (!('doorstatpin' in config.hardware)) config.hardware.doorstatpin = 255;
+        if ('numrelays' in config.hardware) numRelays = config.hardware["numrelays"]; else config.hardware["numrelays"] = numRelays;
         break;
       default:
         break;
@@ -1137,22 +1458,61 @@ function socketMessageListener(evt) {
         }
         break;
       case "eventlist":
+        document.getElementById("saveeventlogbtn").disabled=true; 
+        document.getElementById("cleareventlogbtn").disabled=true; 
         if (page < haspages && obj.result === true) {
           getnextpage("geteventlog");
         } else if (page === haspages) {
           initEventTable();
+          document.getElementById("saveeventlogbtn").disabled=false;
+          // only enable delete button for main event log
+          // others need to be done from the maintenance section
+          if (theCurrentLogFile === "/eventlog.json")
+          {
+            document.getElementById("cleareventlogbtn").disabled=false; 
+          } 
           document.getElementById("loading-img").style.display = "none";
         }
         break;
       case "latestlist":
+        document.getElementById("savelatestlogbtn").disabled=true; 
+        document.getElementById("clearlatestlogbtn").disabled=true; 
         if (page < haspages && obj.result === true) {
           getnextpage("getlatestlog");
         } else if (page === haspages) {
           initLatestLogTable();
+          document.getElementById("savelatestlogbtn").disabled=false; 
+          if (theCurrentLogFile === "/latestlog.json")
+          {
+            document.getElementById("clearlatestlogbtn").disabled=false; 
+          } 
           document.getElementById("loading-img").style.display = "none";
         }
         break;
-      case "userfile":
+        case "listfiles":
+          if (page < haspages && obj.result === true) {
+            getnextpage("listfiles");
+          } else if (page === haspages) {
+            initFileListTable();
+            document.getElementById("loading-img").style.display = "none";
+          }
+          break;
+        case "logfileMaintenance":
+          if (obj.result === false) 
+          {
+            if (obj.hasOwnProperty("message"))
+            {
+              alert (obj.message);
+            } else 
+            {
+              alert ("Operation failed")
+            }
+          } else
+          {
+            $("#logmaintenance").click();
+          }
+          break;
+        case "userfile":
         if (restorestarted) {
           if (!completed && obj.result === true) {
             restore1by1(slot, recordstorestore, data);
@@ -1169,13 +1529,134 @@ function socketMessageListener(evt) {
 }
 
 function clearevent() {
-  websock.send("{\"command\":\"clearevent\"}");
-  $("#eventlog").click();
+  if (confirm('Deleting the Event log file can not be undone - delete ?')) {
+    websock.send("{\"command\":\"clearevent\"}");
+    $("#eventlog").click();
+  }
+}
+
+function saveLogfile(obj,anchorElement,filename) {
+  var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(obj, null, 2));
+  var dlAnchorElem = document.getElementById(anchorElement);
+  dlAnchorElem.setAttribute("href", dataStr);
+  dlAnchorElem.setAttribute("download", filename);
+  dlAnchorElem.click();
+}
+
+function saveevent() {
+  file.type = "esp-rfid-eventlog";
+  file.list = data;
+  saveLogfile(file,"downloadEvent","esp-rfid-eventlog.json");
+}
+
+function savelatest() {
+  file.type = "esp-rfid-accesslog";
+  file.list = data;
+  saveLogfile(file,"downloadLatest","esp-rfid-accesslog.json");
 }
 
 function clearlatest() {
-  websock.send("{\"command\":\"clearlatest\"}");
-  $("#latestlog").click();
+  if (confirm('Deleting the Access log file can not be undone - delete ?')) {
+    websock.send("{\"command\":\"clearlatest\"}");
+    $("#latestlog").click();
+  }
+}
+
+function changeRelayNumber(){
+  numRelays = $("#numrlys :selected").val();
+
+  // downstream config compatibility
+
+  config.hardware["numrelays"] = numRelays; 
+
+  // add the missing form elements
+
+  updateRelayForm();
+  updateUserModalForm();
+}
+
+function updateRelayForm(){
+  //alert (numRelays);
+  var i;
+  for (i=2; i<= maxNumRelays; i++)
+  {
+
+    // downstream compatibility
+    if (!(config.hardware.hasOwnProperty("relay"+i))) 
+    {
+      var relayJson =
+      { 
+        "rtype": 1,
+        "ltype": 0,
+        "rpin": 4,
+        "rtime": 400,
+      };
+      config.hardware["relay"+i] = relayJson; 
+    }
+    
+
+    var relayForm = $("#relayform");
+    var relayparent= $("#relayformparent");
+    if (i<= numRelays) 
+    {
+      var existingRelayForm = document.getElementById("relayform" + i);
+      if (!(existingRelayForm))
+      {
+        var relayFormClone = relayForm.clone(true);
+        var cloneObj = relayFormClone[0];
+        relayFormClone.attr('id', 'relayform' + i);
+
+        var str = cloneObj.innerHTML;
+        str=str.replace("Relay 1 Settings","Relay "+i + " settings");
+        str=str.replace ("gpiorly","gpiorly" +i);
+        str=str.replace ("lockType","lockType" +i);
+        str=str.replace ("typerly","typerly" +i);
+        str=str.replace ("handleLock(1)","handleLock(" +i+")");
+        str=str.replace ("testRelay(1)","testRelay(" +i+")");
+        str=str.replace ("activateTimeForm","activateTimeForm"+i);
+        cloneObj.innerHTML=str.replace ("delay","delay" +i);
+        relayparent[0].appendChild(relayFormClone[0]);
+      }
+      handleLock(i);
+    } else {
+      var removeRelayForm = document.getElementById("relayform" + i);
+      if (removeRelayForm)
+      {
+        relayparent[0].removeChild(removeRelayForm);
+      }
+    }
+  }
+}
+
+function updateUserModalForm(){
+  var i;
+  for (i=2; i<= maxNumRelays; i++)
+  {
+    var accTypeForm = $("#useracctype");
+    var accParent= $("#usermodalbody");
+    if (i<= numRelays) 
+    {
+      var existingaccTypeForm = document.getElementById("useracctype" + i);
+      if (!(existingaccTypeForm))
+      {
+        var accTypeFormClone = accTypeForm.clone(true);
+        var cloneObj = accTypeFormClone[0];
+        accTypeFormClone.attr('id', 'useracctype' + i);
+
+        var str = cloneObj.innerHTML;
+        str=str.replace(/acctype/g,"acctype"+i);
+        str=str.replace("Access Type","Access Relay "+i);
+        cloneObj.innerHTML=str;
+        accParent[0].appendChild(cloneObj);
+      }
+    } else {
+      var removeAccForm = document.getElementById("useracctype" + i);
+      if (removeAccForm)
+      {
+        accParent[0].removeChild(removeAccForm);
+      }
+    }
+  }
 }
 
 function compareDestroy() {
@@ -1231,6 +1712,7 @@ $("#users").click(function() {
   getContent("#userscontent");
 });
 $("#latestlog").click(function() {
+  theCurrentLogFile="/latestlog.json";
   getContent("#logcontent");
   return false;
 });
@@ -1243,7 +1725,16 @@ $("#reset").click(function() {
   return false;
 });
 $("#eventlog").click(function() {
+  theCurrentLogFile = "/eventlog.json";
   getContent("#eventcontent");
+  return false;
+});
+$("#logsettings").click(function() {
+  getContent("#logsettingscontent");
+  return false;
+});
+$("#logmaintenance").click(function() {
+  getContent("#logmaintenancecontent");
   return false;
 });
 $(".noimp").on("click", function() {

@@ -62,18 +62,26 @@ bool ICACHE_FLASH_ATTR loadConfiguration()
 			openLockButton.interval(30);
 		}
 	}
+
+	if (hardware.containsKey("numrelays"))
+	{
+		numRelays = hardware["numrelays"];
+	}
+	else numRelays=1;
+
+
 #ifdef OFFICIALBOARD
 	setupWiegandReader(5, 4);
 #endif
 #ifndef OFFICIALBOARD
 	readertype = hardware["readertype"];
-	if (readertype == 1 || readertype == 5)
+	if (readertype == READER_WIEGAND || readertype == READER_WIEGAND_RDM6300)
 	{
 		int wgd0pin = hardware["wgd0pin"];
 		int wgd1pin = hardware["wgd1pin"];
 		setupWiegandReader(wgd0pin, wgd1pin); // also some other settings like weather to use keypad or not, LED pin, BUZZER pin, Wiegand 26/34 version
 	}
-	else if (readertype == 0 || readertype == 4)
+	else if (readertype == READER_MFRC522 || readertype == READER_MFRC522_RDM6300)
 	{
 		rfidss = 15;
 		if (hardware.containsKey("sspin"))
@@ -83,7 +91,7 @@ bool ICACHE_FLASH_ATTR loadConfiguration()
 		int rfidgain = hardware["rfidgain"];
 		setupMFRC522Reader(rfidss, rfidgain);
 	}
-	else if (readertype == 2 || readertype == 6)
+	else if (readertype == READER_PN532 || readertype == READER_PN532_RDM6300)
 	{
 		rfidss = hardware["sspin"];
 		setupPN532Reader(rfidss);
@@ -95,8 +103,8 @@ bool ICACHE_FLASH_ATTR loadConfiguration()
 	autoRestartIntervalSeconds = general["restart"];
 	wifiTimeout = network["offtime"];
 	const char *bssidmac = network["bssid"];
-	byte bssid[6];
-	parseBytes(bssidmac, ':', bssid, 6, 16);
+	byte bssid[6]={0,0,0,0,0,0};
+	if (strlen(bssidmac) > 0 ) parseBytes(bssidmac, ':', bssid, 6, 16);
 	deviceHostname = strdup(general["hostnm"]);
 	WiFi.hostname(deviceHostname);
 	if (!MDNS.begin(deviceHostname))
@@ -109,13 +117,25 @@ bool ICACHE_FLASH_ATTR loadConfiguration()
 	const char *ntpserver = ntp["server"];
 	int ntpinter = ntp["interval"];
 	timeZone = ntp["timezone"];
-	activateTime = hardware["rtime"];
-	lockType = hardware["ltype"];
-	relayType = hardware["rtype"];
+	activateTime[0] = hardware["rtime"];
+	lockType[0]= hardware["ltype"];
+	relayType[0] = hardware["rtype"];
+
 #ifndef OFFICIALBOARD
-	relayPin = hardware["rpin"];
-	pinMode(relayPin, OUTPUT);
-	digitalWrite(relayPin, !relayType);
+	relayPin[0] = hardware["rpin"];
+	pinMode(relayPin[0], OUTPUT);
+	digitalWrite(relayPin[0], !relayType[0]);
+
+	for (int i = 1; i <numRelays ; i++){
+		JsonObject &relay = hardware["relay"+String((i+1))];
+ 		activateTime[i] = relay["rtime"];
+		lockType[i]= relay["ltype"];
+		relayType[i] = relay["rtype"];
+		relayPin[i] = relay["rpin"];
+		pinMode(relayPin[i], OUTPUT);
+		digitalWrite(relayPin[i], !relayType[i]);
+	}
+
 #endif
 	const char *ssid = network["ssid"];
 	const char *password = network["pswd"];
