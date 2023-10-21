@@ -10,7 +10,7 @@
 
 // timing constants
 
-#define COOLDOWN_MILIS 2000 // Milliseconds the RFID reader will be blocked between inputs
+#define COOLDOWN_MILIS 2000          // Milliseconds the RFID reader will be blocked between inputs
 #define KEYBOARD_TIMEOUT_MILIS 10000 // timeout in milis for keyboard input
 
 // user related numbers
@@ -21,17 +21,14 @@
 
 // Reader defines
 
-#define WIEGANDTYPE_KEYPRESS 4
-#define WIEGANDTYPE_PICC26 26
+#define WIEGANDTYPE_KEYPRESS4 4
+#define WIEGANDTYPE_KEYPRESS8 8
+#define WIEGANDTYPE_PICC24 24
 #define WIEGANDTYPE_PICC34 34
 
 // hardware defines
 
-#ifdef OFFICIALBOARD
-    #define MAX_NUM_RELAYS 1
-#else
-    #define MAX_NUM_RELAYS 4
-#endif
+#define MAX_NUM_RELAYS 4
 
 #define LOCKTYPE_MOMENTARY 0
 #define LOCKTYPE_CONTINUOUS 1

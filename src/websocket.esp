@@ -1,20 +1,18 @@
 void ICACHE_FLASH_ATTR procMsg(AsyncWebSocketClient *client, size_t sz)
 {
 	// We should always get a JSON object (stringfied) from browser, so parse it
-	DynamicJsonBuffer jsonBuffer;
-	//JsonObject &root = jsonBuffer.parseObject(msg);
+	DynamicJsonDocument root(8192);
 	char json[sz + 1];
 	memcpy(json, (char *)(client->_tempObject), sz);
 	json[sz] = '\0';
-	JsonObject &root = jsonBuffer.parseObject(json);
-	if (!root.success())
+	auto error = deserializeJson(root, json);
+	if (error)
 	{
 #ifdef DEBUG
 		Serial.println(F("[ WARN ] Couldn't parse WebSocket message"));
 #endif
 		free(client->_tempObject);
 		client->_tempObject = NULL;
-		//delete client->_tempObject;
 		return;
 	}
 	// Web Browser sends some commands, check which command is given
@@ -26,24 +24,18 @@ void ICACHE_FLASH_ATTR procMsg(AsyncWebSocketClient *client, size_t sz)
 		String filename = "/P/";
 		filename += uid;
 		SPIFFS.remove(filename);
+		ws.textAll("{\"command\":\"result\",\"resultof\":\"remove\",\"result\": true}");
 	}
 	else if (strcmp(command, "configfile") == 0)
 	{
-		File f = SPIFFS.open("/config.json", "w+");
+		File f = SPIFFS.open("/config.json", "w");
 		if (f)
 		{
-			size_t len = root.measurePrettyLength();
-			root.prettyPrintTo(f);
-			//f.print(msg);
+			size_t len = measureJsonPretty(root);
+			serializeJsonPretty(root, f);
 			f.close();
 			shouldReboot = true;
-			//ESP.restart();
 			writeEvent("INFO", "sys", "Config stored in the SPIFFS", String(len) + " bytes");
-#ifdef DEBUG
-			Serial.print(F("[ INFO ] Config stored in the SPIFFS ("));
-			Serial.print(len);
-			Serial.println(F(" bytes)"));
-#endif
 		}
 	}
 	else if (strcmp(command, "userlist") == 0)
@@ -98,9 +90,7 @@ void ICACHE_FLASH_ATTR procMsg(AsyncWebSocketClient *client, size_t sz)
 	{
 #ifdef DEBUG
 		Serial.println(F("[ DEBUG ] userfile received"));
-		String st = String();
-		root.printTo(st);
-		Serial.println(st);
+		serializeJson(root, Serial);
 #endif
 		const char *uid = root["uid"];
 		String filename = "/P/";
@@ -109,8 +99,7 @@ void ICACHE_FLASH_ATTR procMsg(AsyncWebSocketClient *client, size_t sz)
 		// Check if we created the file
 		if (f)
 		{
-			//f.print(msg);
-			root.printTo(f);
+			serializeJson(root, f);
 #ifdef DEBUG
 		Serial.println(F("[ DEBUG ] userfile saved"));
 #endif
@@ -124,7 +113,6 @@ void ICACHE_FLASH_ATTR procMsg(AsyncWebSocketClient *client, size_t sz)
 		previousMillis = millis();
 		ws.textAll("{\"command\":\"giveAccess\"}");
 	}
-#ifndef OFFICIALBOARD	
 	else if (strcmp(command, "testrelay2") == 0)
 	{
 		activateRelay[1] = true;
@@ -143,20 +131,19 @@ void ICACHE_FLASH_ATTR procMsg(AsyncWebSocketClient *client, size_t sz)
 		previousMillis = millis();
 		ws.textAll("{\"command\":\"giveAccess\"}");
 	}
-#endif
 	else if (strcmp(command, "scan") == 0)
 	{
 		WiFi.scanNetworksAsync(printScanResult, true);
 	}
 	else if (strcmp(command, "gettime") == 0)
 	{
-		timerequest = true;
+		sendTime();
 	}
 	else if (strcmp(command, "settime") == 0)
 	{
 		time_t t = root["epoch"];
 		setTime(t);
-		timerequest = true;
+		sendTime();
 	}
 	else if (strcmp(command, "getconf") == 0)
 	{

@@ -6,7 +6,6 @@ var utcSeconds;
 var timezone;
 var data = [];
 var ajaxobj;
-var isOfficialBoard = false;
 
 var maxNumRelays=4;
 var numRelays=1;
@@ -28,7 +27,8 @@ var config = {
         "gateway": "",
         "dns": "",
         "apip": "192.168.4.1",
-        "apsubnet": "255.255.255.0"
+        "apsubnet": "255.255.255.0",
+        "fallbackmode": 0
     },
     "hardware": {
         "readertype": 1,
@@ -41,28 +41,43 @@ var config = {
         "ltype": 0,
         "rpin": 4,
         "rtime": 400,
-        "buttonpin": 255
+        "doorname": "Door",
+        "beeperpin" : 255,
+        "ledwaitingpin" : 255,
+        "openlockpin": 255,
+        "doorbellpin": 255,
+        "accessdeniedpin": 255,
+        "useridstoragemode": "hexadecimal",
+        "requirepincodeafterrfid": 1,
+        "allowpincodeonly": 0,
+        "removeparitybits": 1,
+        "doorstatpin": 255,
+        "maxOpenDoorTime": 0
     },
     "general": {
         "hostnm": "esp-rfid",
         "restart": 0,
-        "pswd": "admin"
+        "pswd": "admin",
+        "openinghours": [
+          "111111111111111111111111",
+          "111111111111111111111111",
+          "111111111111111111111111",
+          "111111111111111111111111",
+          "111111111111111111111111",
+          "111111111111111111111111",
+          "111111111111111111111111",
+        ]
     },
     "mqtt": {
         "enabled": 0,
         "host": "",
         "port": 1883,
         "topic": "",
+        "autotopic": 0,
         "user": "",
         "pswd": "",
         "syncrate": 180,
         "mqttlog": 0
-    },
-    "logmaintenance": {
-      "enabled": 0,
-      "rolloverkb": "10",
-      "maxlogfilesnumber": 4,
-      "spiffwatch": 0
     },
     "ntp": {
         "server": "pool.ntp.org",
@@ -80,6 +95,8 @@ var completed = false;
 var file = {};
 var backupstarted = false;
 var restorestarted = false;
+var gotInitialData = false;
+var wsConnectionPresent = false;
 
 var esprfidcontent;
 
@@ -93,7 +110,7 @@ function browserTime() {
 
 function deviceTime() {
   var t = new Date(0); // The 0 there is the key, which sets the date to the epoch,
-  var devTime = Math.floor(utcSeconds + ((t.getTimezoneOffset() * 60) * -1));
+  var devTime = Math.floor(utcSeconds + (config.ntp.timezone * 60 * 60));
   t.setUTCSeconds(devTime);
   document.getElementById("utc").innerHTML = t.toUTCString().slice(0, -3);
 }
@@ -145,43 +162,39 @@ function listhardware() {
   document.getElementById("delay").value = config.hardware.rtime;
   document.getElementById("wifipin").value = config.hardware.wifipin;
   document.getElementById("doorstatpin").value = config.hardware.doorstatpin;
+  document.getElementById("maxOpenDoorTime").value = config.hardware.maxOpenDoorTime;
+  document.getElementById("doorbellpin").value = config.hardware.doorbellpin;
   document.getElementById("openlockpin").value = config.hardware.openlockpin;
-  if (isOfficialBoard) {
-    document.getElementById("readertype").value = 1;
-    document.getElementById("wg0pin").value = 5;
-    document.getElementById("wg1pin").value = 4;
-    document.getElementById("gpiorly").value = 13;
-    document.getElementById("wg0pin").disabled = true;
-    document.getElementById("wg1pin").disabled = true;
-    document.getElementById("gpiorly").disabled = true;
-    document.getElementById("readertype").disabled = true;
-  } else {
-    document.getElementById("readertype").value = config.hardware.readertype;
-    document.getElementById("wg0pin").value = config.hardware.wgd0pin;
-    document.getElementById("wg1pin").value = config.hardware.wgd1pin;
-    document.getElementById("gpioss").value = config.hardware.sspin;
-    document.getElementById("gain").value = config.hardware.rfidgain;
-    document.getElementById("gpiorly").value = config.hardware.rpin;
-    document.getElementById("numrlys").value = numRelays;
-    updateRelayForm();
-    updateUserModalForm();
+  document.getElementById("accessdeniedpin").value = config.hardware.accessdeniedpin;
+  document.getElementById("useridstoragemode").value = config.hardware.useridstoragemode;
+  document.getElementById("requirepincodeafterrfid").checked = config.hardware.requirepincodeafterrfid;
+  document.getElementById("allowpincodeonly").checked = config.hardware.allowpincodeonly;
+  document.getElementById("removeparitybits").checked = config.hardware.removeparitybits;
+  document.getElementById("ledwaitingpin").value = config.hardware.ledwaitingpin;
+  document.getElementById("beeperpin").value = config.hardware.beeperpin;
+  document.getElementById("readertype").value = config.hardware.readertype;
+  document.getElementById("wg0pin").value = config.hardware.wgd0pin;
+  document.getElementById("wg1pin").value = config.hardware.wgd1pin;
+  document.getElementById("gpioss").value = config.hardware.sspin;
+  document.getElementById("gain").value = config.hardware.rfidgain;
+  document.getElementById("gpiorly").value = config.hardware.rpin;
+  document.getElementById("doorname").value = config.hardware.doorname || "";
+  document.getElementById("numrlys").value = numRelays;
+  updateRelayForm();
+  updateUserModalForm();
 
-
-    for (var i = 2; i<=numRelays; i++)
-    {
-
-      document.getElementById("gpiorly"+i).value = config.hardware["relay"+i].rpin;
-      document.getElementById("lockType"+i).value = config.hardware["relay"+i].ltype;
-      document.getElementById("typerly"+i).value = config.hardware["relay"+i].rtype;
-      document.getElementById("delay"+i).value = config.hardware["relay"+i].rtime;
-    }  
+  for (var i = 2; i<=numRelays; i++) {
+    document.getElementById("gpiorly"+i).value = config.hardware["relay"+i].rpin;
+    document.getElementById("lockType"+i).value = config.hardware["relay"+i].ltype;
+    document.getElementById("typerly"+i).value = config.hardware["relay"+i].rtype;
+    document.getElementById("delay"+i).value = config.hardware["relay"+i].rtime;
+    document.getElementById("doorname"+i).value = config.hardware["relay"+i].doorname || "";
   }
   handleReader();
   handleLock();
 }
 
 function listlog() {
-//  websock.send("{\"command\":\"getlatestlog\", \"page\":" + page + "}");
   websock.send("{\"command\":\"getlatestlog\", \"page\":" + page + ", \"filename\":\"" + theCurrentLogFile +"\"}");
 }
 
@@ -215,6 +228,10 @@ function savehardware() {
   config.hardware.readertype = parseInt(document.getElementById("readertype").value);
   config.hardware.wgd0pin = parseInt(document.getElementById("wg0pin").value);
   config.hardware.wgd1pin = parseInt(document.getElementById("wg1pin").value);
+  config.hardware.useridstoragemode = document.getElementById("useridstoragemode").value;
+  config.hardware.requirepincodeafterrfid = document.getElementById("requirepincodeafterrfid").checked;
+  config.hardware.allowpincodeonly = document.getElementById("allowpincodeonly").checked;
+  config.hardware.removeparitybits = document.getElementById("removeparitybits").checked;
   config.hardware.sspin = parseInt(document.getElementById("gpioss").value);
   config.hardware.rfidgain = parseInt(document.getElementById("gain").value);
   config.hardware.rtype = parseInt(document.getElementById("typerly").value);
@@ -223,7 +240,13 @@ function savehardware() {
   config.hardware.rtime = parseInt(document.getElementById("delay").value);
   config.hardware.wifipin = parseInt(document.getElementById("wifipin").value);
   config.hardware.doorstatpin = parseInt(document.getElementById("doorstatpin").value);
+  config.hardware.maxOpenDoorTime = parseInt(document.getElementById("maxOpenDoorTime").value);
+  config.hardware.doorbellpin = parseInt(document.getElementById("doorbellpin").value);
   config.hardware.openlockpin = parseInt(document.getElementById("openlockpin").value);
+  config.hardware.accessdeniedpin = parseInt(document.getElementById("accessdeniedpin").value);
+  config.hardware.beeperpin = parseInt(document.getElementById("beeperpin").value);
+  config.hardware.ledwaitingpin = parseInt(document.getElementById("ledwaitingpin").value);
+  config.hardware.doorname = document.getElementById("doorname").value;
   config.hardware["numrelays"] = numRelays; 
 
   for (var i = 2; i<=numRelays; i++)
@@ -232,6 +255,7 @@ function savehardware() {
     config.hardware["relay"+i].ltype = document.getElementById("lockType"+i).value;
     config.hardware["relay"+i].rtype = document.getElementById("typerly"+i).value;
     config.hardware["relay"+i].rtime = document.getElementById("delay"+i).value;
+    config.hardware["relay"+i].doorname = document.getElementById("doorname"+i).value;
   }  
   uncommited();
 }
@@ -244,6 +268,21 @@ function saventp() {
   uncommited();
 }
 
+function extractOpeningHours() {
+  // removing header row
+  var days = Array.from(document.getElementById("openinghours").getElementsByTagName("tr")).slice(1);
+  var openingHours = []
+  for(var d=0; d<7; d++) {
+    var hours = days[d].getElementsByTagName("input");
+    var dayFlags = "";
+    for(var h=0; h<24; h++) {
+      dayFlags += hours[h].checked ? "1" : "0";
+    }
+    openingHours.push(dayFlags);
+  }
+  return openingHours;
+}
+
 function savegeneral() {
   var a = document.getElementById("adminpwd").value;
   if (a === null || a === "") {
@@ -252,30 +291,43 @@ function savegeneral() {
   }
   config.general.pswd = a;
   config.general.hostnm = document.getElementById("hostname").value;
-  config.general.restart = parseInt(document.getElementById("autorestart").value);
+  if(document.getElementById("autorestart").value == "custom") {
+    config.general.restart = parseInt(document.getElementById("autorestart-custom").value);
+  } else {
+    config.general.restart = parseInt(document.getElementById("autorestart").value);
+  }
+  config.general.openinghours = extractOpeningHours();
   uncommited();
 }
 
 function savemqtt() {
     config.mqtt.enabled = 0;
-    if (parseInt($("input[name=\"mqttenabled\"]:checked").val()) === 1) {
+    if (parseInt($("input[name=\"mqttEnabled\"]:checked").val()) === 1) {
         config.mqtt.enabled = 1;
     }
     else{
       config.mqtt.enabled = 0;
     } 
-    config.mqtt.host     = document.getElementById("mqtthost").value;
-    config.mqtt.port     = parseInt(document.getElementById("mqttport").value);
-    config.mqtt.topic    = document.getElementById("mqtttopic").value;
-    config.mqtt.user     = document.getElementById("mqttuser").value;
-    config.mqtt.pswd     = document.getElementById("mqttpwd").value;
-    config.mqtt.syncrate = document.getElementById("syncrate").value;
-    config.mqtt.mqttlog = 0;
+    config.mqtt.host      = document.getElementById("mqtthost").value;
+    config.mqtt.port      = parseInt(document.getElementById("mqttport").value);
+    config.mqtt.topic     = document.getElementById("mqtttopic").value;
+    config.mqtt.autotopic = document.getElementById("mqttautotopic").checked;
+    config.mqtt.user      = document.getElementById("mqttuser").value;
+    config.mqtt.pswd      = document.getElementById("mqttpwd").value;
+    config.mqtt.syncrate  = document.getElementById("syncrate").value;
+    config.mqtt.mqttlog   = 0;
     if (parseInt($("input[name=\"mqttlog\"]:checked").val()) === 1) {
         config.mqtt.mqttlog = 1;
     }
     else{
         config.mqtt.mqttlog = 0;
+    } 
+    config.mqtt.mqttha = 0;
+    if (parseInt($("input[name=\"mqttha\"]:checked").val()) === 1) {
+        config.mqtt.mqttha = 1;
+    }
+    else{
+        config.mqtt.mqttha = 0;
     } 
     uncommited();
 }
@@ -350,7 +402,7 @@ function savenetwork() {
   config.network.wmode = wmode;
   config.network.pswd = document.getElementById("wifipass").value;
 
-
+  config.network.fallbackmode = document.forms.fallbackmodeForm.fallbackmode.value;
   config.network.offtime = parseInt(document.getElementById("disable_wifi_after_seconds").value);
   uncommited();
 }
@@ -445,7 +497,6 @@ function handleSTA() {
   document.getElementById("dhcp").style.display = "block";
   if (config.network.dhcp === 0) {
     $("input[name=\"dhcpenabled\"][value=\"0\"]").prop("checked", true);
-    //$("input[name=dhcpenabled][value=\"0\"]").attr("checked", "checked");
   }
   handleDHCP();
 }
@@ -458,7 +509,6 @@ function listnetwork() {
     document.getElementById("wmodeap").checked = true;
     if (config.network.hide === 1) {
       $("input[name=\"hideapenable\"][value=\"1\"]").prop("checked", true);
-      //$("input[name=hideapenable][value=\"1\"]").attr("checked", "checked");
     }
     handleAP();
   } else {
@@ -468,87 +518,93 @@ function listnetwork() {
     document.getElementById("gateway").value = config.network.gateway;
     handleSTA();
   }
-
+  document.forms.fallbackmodeForm.fallbackmode.value = config.network.fallbackmode;
   document.getElementById("disable_wifi_after_seconds").value = config.network.offtime;
 
 }
 
-function listgeneral() {
+function populateOpeningHours() {
+  var openingHours = Array(7);
+  for(var d=0; d<7; d++) {
+    openingHours[d] = "111111111111111111111111";
+  }
+  var table = document.getElementById("openinghours");
+  if (config.general.openinghours) {
+    openingHours = config.general.openinghours.map(function(day) { return day.split("") });
+  }
 
+  var firstRow = document.createElement("tr");
+  var spacerTh = document.createElement("th");
+  firstRow.appendChild(spacerTh);
+  for(hour = 0; hour<24; hour++) {
+    var th = document.createElement("th");
+    th.innerText = hour;
+    firstRow.appendChild(th);
+  }
+  table.appendChild(firstRow);
+  var weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  for(var day=0; day<7; day++) {
+    var tr = document.createElement("tr");
+    var firstCol = document.createElement("td");
+    firstCol.innerHTML = "<b>" + weekDays[day] + "</b>";
+    tr.appendChild(firstCol);
+    for(var hour=0; hour<24; hour++) {
+      var td = document.createElement("td");
+      var checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = openingHours[day][hour] == 1;
+      td.appendChild(checkbox);
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+}
+
+function listgeneral() {
   document.getElementById("adminpwd").value = config.general.pswd;
   document.getElementById("hostname").value = config.general.hostnm;
   document.getElementById("autorestart").value = config.general.restart;
+  document.getElementById("autorestart-custom").value = config.general.restart;
+  // if value is not same as the restart option, it's custom
+  var checkedOption = document.querySelector("#content #autorestart option:checked");
+  if(!checkedOption || parseInt(checkedOption.value) != config.general.restart) {
+    $("#autorestart-custom").removeClass("hidden");
+    document.getElementById("autorestart").value = "custom";
+  }
+  $("#autorestart").on("change", function() {
+    if (this.value == "custom") {
+      $("#autorestart-custom").removeClass("hidden");
+    } else {
+      $("#autorestart-custom").addClass("hidden");
+    }
+  });
+  populateOpeningHours();
 }
 
 function listmqtt() {
     if (config.mqtt.enabled === 1) {
-        $("input[name=\"mqttenabled\"][value=\"1\"]").prop("checked", true);
+        $("input[name=\"mqttEnabled\"][value=\"1\"]").prop("checked", true);
     }
     document.getElementById("mqtthost").value = config.mqtt.host;
     document.getElementById("mqttport").value = config.mqtt.port;
     document.getElementById("mqtttopic").value = config.mqtt.topic;
+    document.getElementById("mqttautotopic").checked = config.mqtt.autotopic;
     document.getElementById("mqttuser").value = config.mqtt.user;
     document.getElementById("mqttpwd").value = config.mqtt.pswd;
     document.getElementById("syncrate").value = config.mqtt.syncrate;
     if (config.mqtt.mqttlog === 1) {
         $("input[name=\"mqttlog\"][value=\"1\"]").prop("checked", true);
     }
-   
+    if (config.mqtt.mqttha === 1) {
+      $("input[name=\"mqttha\"][value=\"1\"]").prop("checked", true);
+    }
+    
 }
 
-function savelogsettings() {
-  config.logmaintenance.enabled = 0;
-  if (parseInt($("input[name=\"logmaintenanceenabled\"]:checked").val()) === 1) {
-      config.logmaintenance.enabled = 1;
-  }
-  else{
-    config.logmaintenance.enabled = 0;
-  } 
-  config.logmaintenance.rolloverkb     = document.getElementById("rolloverkb").value;
-  config.logmaintenance.maxlogfilesnumber     = parseInt(document.getElementById("maxlogfilesnumber").value);
-  config.logmaintenance.spiffwatch = 0;
-  if (parseInt($("input[name=\"spiffwatch\"]:checked").val()) === 1) {
-      config.logmaintenance.spiffwatch = 1;
-  }
-  else{
-      config.logmaintenance.spiffwatch = 0;
-  } 
-  uncommited();
-}
-
-function listlogsettings() {
-
-  // downstream compatibility
-
- if (!(config.hasOwnProperty("logmaintenance"))) 
-  {
-    logmaintenanceJson =
-    { 
-      "enabled": 0,
-      "rolloverkb": "10",
-      "maxlogfilesnumber": 5,
-      "spiffwatch": 0
-    };
-
-    config["logmaintenance"] = logmaintenanceJson; 
-  }
-
-
-  if (config.logmaintenance.enabled === 1) {
-      $("input[name=\"logmaintenanceenabled\"][value=\"1\"]").prop("checked", true);
-  }
-  document.getElementById("rolloverkb").value = config.logmaintenance.rolloverkb;
-  document.getElementById("maxlogfilesnumber").value = config.logmaintenance.maxlogfilesnumber;
-  if (config.logmaintenance.spiffwatch === 1) {
-      $("input[name=\"spiffwatch\"][value=\"1\"]").prop("checked", true);
-  }
- 
-}
 function getFileList() {
     websock.send("{\"command\":\"listfiles\", \"page\":" + page + "}");
 }
-
-
 
 function listBSSID() {
   var select = document.getElementById("ssid");
@@ -693,9 +749,6 @@ function getContent(contentname) {
         case "#hardwarecontent":
           listhardware();
           break;
-        case "#logsettingscontent":
-          listlogsettings();
-          break;
         case "#logmaintenancecontent":
           page = 1;
           data = [];
@@ -779,18 +832,15 @@ function restoreSet() {
 
 function restore1by1(i, len, data) {
   var part = 100 / len;
-  var uid, user, acc, valid;
   document.getElementById("dynamic").style.width = part * (i + 1) + "%";
   var datatosend = {};
-  uid = data[i].uid;
-  user = data[i].username;
-  acc = data[i].acctype;
-  valid = data[i].validuntil;
   datatosend.command = "userfile";
-  datatosend.uid = uid;
-  datatosend.user = user;
-  datatosend.acctype = acc;
-  datatosend.validuntil = valid;
+  datatosend.uid = data[i].uid;
+  datatosend.pincode = data[i].pincode;
+  datatosend.user = data[i].username;
+  datatosend.acctype = data[i].acctype;
+  datatosend.validsince = data[i].validsince;
+  datatosend.validuntil = data[i].validuntil;
   websock.send(JSON.stringify(datatosend));
   slot++;
   if (slot === len) {
@@ -846,14 +896,6 @@ function twoDigits(value) {
 }
 
 function initFileListTable() {
-//  var newlist = [];
-//  for (var i = 0; i < data.length; i++) {
-//    var dup = JSON.parse(data[i]);
-//    newlist[i] = {};
-//    newlist[i].options = {};
-//    newlist[i].value = {};
-//    newlist[i].value = dup;
-//  }
   jQuery(function($) {
     window.FooTable.init("#spifftable", {
       columns: [{
@@ -930,11 +972,8 @@ function initFileListTable() {
               .on("click", this, rollover))
               .appendTo(actions);
             } 
-            
-
 
             return actions;
-              //'<span class="glyphicon glyphicon-chevron-up" aria-hidden="true"></span></a>'
           }
       }
 
@@ -1038,7 +1077,7 @@ function initEventTable() {
           "parser": function(value) {
             if (value < 1520665101) {
               return value;
-            } else {
+            } else {  
               var comp = new Date();
               value = Math.floor(value + ((comp.getTimezoneOffset() * 60) * -1));
               var vuepoch = new Date(value * 1000);
@@ -1162,12 +1201,18 @@ function initUserTable() {
             "style": "font-family:monospace"
           },
           {
+            "name": "pincode",
+            "title": "Pin code",
+            "type": "text",
+            "visible": false
+          },
+          {
             "name": "username",
             "title": "User Name or Label"
           },
           {
             "name": "acctype",
-            "title": "Access Rl1",
+            "title": "Access Door " + config.hardware.doorname || "1",
             "breakpoints": "xs",
             "parser": function(value) {
               if (value === 1) {
@@ -1182,7 +1227,7 @@ function initUserTable() {
           },
           {
             "name": "acctype2",
-            "title": "Access Rl2",
+            "title": "Access Door " + config.hardware.relay2?.doorname || "2",
             "breakpoints": "xs",
             "visible": false,
             "parser": function(value) {
@@ -1198,7 +1243,7 @@ function initUserTable() {
           },
           {
             "name": "acctype3",
-            "title": "Access Rl3",
+            "title": "Access Door " + config.hardware.relay3?.doorname || "3",
             "breakpoints": "xs",
             "visible": false,
             "parser": function(value) {
@@ -1214,7 +1259,7 @@ function initUserTable() {
           },
           {
             "name": "acctype4",
-            "title": "Access Rl4",
+            "title": "Access Door " + config.hardware.relay4?.doorname || "4",
             "breakpoints": "xs",
             "visible": false,
             "parser": function(value) {
@@ -1229,6 +1274,21 @@ function initUserTable() {
             },
           },
           {
+            "name": "validsince",
+            "title": "Valid Since",
+            "breakpoints": "xs sm",
+            "parser": function(value) {
+              console.log(value)
+              var comp = new Date();
+              value = Math.floor(value + ((comp.getTimezoneOffset() * 60) * -1));
+              var vuepoch = new Date(value * 1000);
+              var formatted = vuepoch.getFullYear() +
+                "-" + twoDigits(vuepoch.getMonth() + 1) +
+                "-" + twoDigits(vuepoch.getDate());
+              return formatted;
+            },
+          },
+          {
             "name": "validuntil",
             "title": "Valid Until",
             "breakpoints": "xs sm",
@@ -1240,7 +1300,7 @@ function initUserTable() {
                 "-" + twoDigits(vuepoch.getMonth() + 1) +
                 "-" + twoDigits(vuepoch.getDate());
               return formatted;
-            },
+            }
           }
         ],
         rows: data,
@@ -1267,11 +1327,13 @@ function initUserTable() {
               if (xval === "Disabled") return 0;
             }
             $editor.find("#uid").val(values.uid);
+            $editor.find("#pincode").val(values.pincode);
             $editor.find("#username").val(values.username);
             $editor.find("#acctype").val(giveAccType(1));
             $editor.find("#acctype2").val(giveAccType(2));
             $editor.find("#acctype3").val(giveAccType(3));
             $editor.find("#acctype4").val(giveAccType(4));
+            $editor.find("#validsince").val(values.validsince);
             $editor.find("#validuntil").val(values.validuntil);
             $modal.data("row", row);
             $editorTitle.text("Edit User # " + values.username);
@@ -1300,13 +1362,16 @@ function initUserTable() {
       var row = $modal.data("row"),
         values = {
           uid: $editor.find("#uid").val(),
+          pincode: $editor.find("#pincode").val(),
           username: $editor.find("#username").val(),
           acctype: parseInt($editor.find("#acctype").val()),
           acctype2: parseInt($editor.find("#acctype2").val()),
           acctype3: parseInt($editor.find("#acctype3").val()),
           acctype4: parseInt($editor.find("#acctype4").val()),
+          validsince: (new Date($editor.find("#validsince").val()).getTime() / 1000),
           validuntil: (new Date($editor.find("#validuntil").val()).getTime() / 1000)
         };
+      console.log(values.validuntil);
       if (row instanceof window.FooTable.Row) {
         row.delete();
         values.id = uid++;
@@ -1318,11 +1383,15 @@ function initUserTable() {
       var datatosend = {};
       datatosend.command = "userfile";
       datatosend.uid = $editor.find("#uid").val();
+      datatosend.pincode = $editor.find("#pincode").val();
       datatosend.user = $editor.find("#username").val();
       datatosend.acctype = parseInt($editor.find("#acctype").val());
       datatosend.acctype2 = parseInt($editor.find("#acctype2").val());
       datatosend.acctype3 = parseInt($editor.find("#acctype3").val());
       datatosend.acctype4 = parseInt($editor.find("#acctype4").val());
+      var validsince = $editor.find("#validsince").val();
+      var vsepoch = (new Date(validsince).getTime() / 1000);
+      datatosend.validsince = vsepoch;
       var validuntil = $editor.find("#validuntil").val();
       var vuepoch = (new Date(validuntil).getTime() / 1000);
       datatosend.validuntil = vuepoch;
@@ -1353,16 +1422,11 @@ function restartESP() {
   inProgress("restart");
 }
 
-var nextIsNotJson = false;
-
 function socketMessageListener(evt) {
   var obj = JSON.parse(evt.data);
   if (obj.hasOwnProperty("command")) {
     switch (obj.command) {
       case "status":
-        if (obj.hasOwnProperty("board")) {
-          isOfficialBoard = true;
-        }
         ajaxobj = obj;
         getContent("#statuscontent");
         break;
@@ -1421,6 +1485,9 @@ function socketMessageListener(evt) {
         config = obj;
         if (!('wifipin' in config.hardware)) config.hardware.wifipin = 255;
         if (!('doorstatpin' in config.hardware)) config.hardware.doorstatpin = 255;
+        if (!('maxOpenDoorTime' in config.hardware)) config.hardware.maxOpenDoorTime = 0;
+        if (!('doorbellpin' in config.hardware)) config.hardware.doorbellpin = 255;
+        if (!('accessdeniedpin' in config.hardware)) config.hardware.accessdeniedpin = 255;
         if ('numrelays' in config.hardware) numRelays = config.hardware["numrelays"]; else config.hardware["numrelays"] = numRelays;
         break;
       default:
@@ -1575,15 +1642,10 @@ function changeRelayNumber(){
   updateUserModalForm();
 }
 
-function updateRelayForm(){
-  //alert (numRelays);
-  var i;
-  for (i=2; i<= maxNumRelays; i++)
-  {
-
+function updateRelayForm() {
+  for (var i = 2; i <= maxNumRelays; i++) {
     // downstream compatibility
-    if (!(config.hardware.hasOwnProperty("relay"+i))) 
-    {
+    if (!(config.hardware.hasOwnProperty("relay" + i))) {
       var relayJson =
       { 
         "rtype": 1,
@@ -1591,17 +1653,14 @@ function updateRelayForm(){
         "rpin": 4,
         "rtime": 400,
       };
-      config.hardware["relay"+i] = relayJson; 
+      config.hardware["relay" + i] = relayJson; 
     }
-    
 
     var relayForm = $("#relayform");
     var relayparent= $("#relayformparent");
-    if (i<= numRelays) 
-    {
+    if (i<= numRelays) {
       var existingRelayForm = document.getElementById("relayform" + i);
-      if (!(existingRelayForm))
-      {
+      if (!(existingRelayForm)) {
         var relayFormClone = relayForm.clone(true);
         var cloneObj = relayFormClone[0];
         relayFormClone.attr('id', 'relayform' + i);
@@ -1611,6 +1670,7 @@ function updateRelayForm(){
         str=str.replace ("gpiorly","gpiorly" +i);
         str=str.replace ("lockType","lockType" +i);
         str=str.replace ("typerly","typerly" +i);
+        str=str.replace ("doorname","doorname" +i);
         str=str.replace ("handleLock(1)","handleLock(" +i+")");
         str=str.replace ("testRelay(1)","testRelay(" +i+")");
         str=str.replace ("activateTimeForm","activateTimeForm"+i);
@@ -1620,8 +1680,7 @@ function updateRelayForm(){
       handleLock(i);
     } else {
       var removeRelayForm = document.getElementById("relayform" + i);
-      if (removeRelayForm)
-      {
+      if (removeRelayForm) {
         relayparent[0].removeChild(removeRelayForm);
       }
     }
@@ -1629,9 +1688,11 @@ function updateRelayForm(){
 }
 
 function updateUserModalForm(){
-  var i;
-  for (i=2; i<= maxNumRelays; i++)
-  {
+  if(config.hardware.doorname) {
+    $("#useracctype label").text("Access to " + config.hardware.doorname);
+  }
+
+  for (var i=2; i<= maxNumRelays; i++) {
     var accTypeForm = $("#useracctype");
     var accParent= $("#usermodalbody");
     if (i<= numRelays) 
@@ -1641,11 +1702,12 @@ function updateUserModalForm(){
       {
         var accTypeFormClone = accTypeForm.clone(true);
         var cloneObj = accTypeFormClone[0];
-        accTypeFormClone.attr('id', 'useracctype' + i);
+        accTypeFormClone.attr("id", "useracctype" + i);
 
         var str = cloneObj.innerHTML;
-        str=str.replace(/acctype/g,"acctype"+i);
-        str=str.replace("Access Type","Access Relay "+i);
+        str=str.replace(/acctype/g, "acctype"+i);
+        str=str.replace("Access Type Relay 1", "Access Type Relay "+i);
+        str=str.replace ("<option value=\"99\">Admin</option>", "");
         cloneObj.innerHTML=str;
         accParent[0].appendChild(cloneObj);
       }
@@ -1729,10 +1791,6 @@ $("#eventlog").click(function() {
   getContent("#eventcontent");
   return false;
 });
-$("#logsettings").click(function() {
-  getContent("#logsettingscontent");
-  return false;
-});
 $("#logmaintenance").click(function() {
   getContent("#logmaintenancecontent");
   return false;
@@ -1746,7 +1804,7 @@ window.FooTable.MyFiltering = window.FooTable.Filtering.extend({
     this._super(instance);
     this.acctypes = ["1", "99", "0"];
     this.acctypesstr = ["Always", "Admin", "Disabled"];
-    this.def = "Access Type";
+    this.def = config.hardware.doorname ? "Access to " + config.hardware.doorname : "Access Type";
     this.$acctype = null;
   },
   $create: function() {
@@ -1854,19 +1912,51 @@ function logout() {
   return false;
 }
 
-function connectWS() {
-    if (window.location.protocol === "https:") {
-        wsUri = "wss://" + window.location.hostname + ":" + window.location.port + "/ws";
-    } else if (window.location.protocol === "file:") {
-        wsUri = "ws://" + "localhost" + "/ws";
-    }
-    websock = new WebSocket(wsUri);
-    websock.addEventListener("message", socketMessageListener);
+function wsConnectionActive() {
+  wsConnectionPresent = true;
+  websock.send("{\"command\":\"status\"}");
+  $("#ws-connection-status").slideUp();
+}
 
-    websock.onopen = function(evt) {
-        websock.send("{\"command\":\"getconf\"}");
-        websock.send("{\"command\":\"status\"}");
-    };
+function wsConnectionClosed() {
+  wsConnectionPresent = false;
+  $("#ws-connection-status").slideDown();
+  connectWS();
+}
+
+function keepWSConnectionOpen() {
+  if (!wsConnectionPresent) {
+    setTimeout(connectWS, 5000);
+  }
+}
+
+function connectWS() {
+  if(wsConnectionPresent) {
+    return;
+  }
+
+  if (window.location.protocol === "https:") {
+    wsUri = "wss://" + window.location.hostname + ":" + window.location.port + "/ws";
+  } else if (window.location.protocol === "file:" ||
+      ["0.0.0.0", "localhost", "127.0.0.1"].includes(window.location.hostname)) {
+    wsUri = "ws://localhost:8080/ws";
+  }
+  websock = new WebSocket(wsUri);
+  websock.addEventListener("message", socketMessageListener);
+
+  websock.onopen = function(evt) {
+    if (!gotInitialData) {
+      websock.send("{\"command\":\"getconf\"}");
+      gotInitialData = true;
+    }
+    wsConnectionActive();
+  };
+
+  websock.onclose = function(evt) {
+    wsConnectionClosed();
+  };
+
+  keepWSConnectionOpen();
 }
 
 function upload() {
