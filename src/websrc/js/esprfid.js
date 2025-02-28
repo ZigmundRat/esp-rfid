@@ -3,8 +3,8 @@ var version = "";
 var websock = null;
 var wsUri = "ws://" + window.location.host + "/ws";
 var utcSeconds;
-var timezone;
 var data = [];
+var ft;
 var ajaxobj;
 
 var maxNumRelays=4;
@@ -34,6 +34,7 @@ var config = {
         "readertype": 1,
         "wgd0pin": 4,
         "wgd1pin": 5,
+        "rdm6300pin": 4,
         "sspin": 0,
         "rfidgain": 32,
         "wifipin": 255,
@@ -82,7 +83,7 @@ var config = {
     "ntp": {
         "server": "pool.ntp.org",
         "interval": 30,
-        "timezone": 0
+        "tzinfo": ""
     }
 };
 
@@ -99,20 +100,42 @@ var gotInitialData = false;
 var wsConnectionPresent = false;
 
 var esprfidcontent;
+var websocketMessagesToRetry = [];
 
-function browserTime() {
-  var d = new Date(0);
-  var c = new Date();
-  var timestamp = Math.floor((c.getTime() / 1000) + ((c.getTimezoneOffset() * 60) * -1));
-  d.setUTCSeconds(timestamp);
-  document.getElementById("rtc").innerHTML = d.toUTCString().slice(0, -3);
+function sendWebsocket(msg) {
+  websock.send(msg);
+}
+
+function sendWebsocketWithRetry(msg) {
+  websock.send(msg);
+  websocketMessagesToRetry.push({
+    message: msg,
+    timestamp: Date.now()
+  });
+
+  setTimeout(function(){
+    retrySendWebsocket();
+  }, 10000);
+}
+
+function retrySendWebsocket() {
+  if(websocketMessagesToRetry.length > 0) {
+    var now = Date.now();
+    var oldestMessage = websocketMessagesToRetry[0];
+    if(now - oldestMessage.timestamp > 10000) {
+      sendWebsocketWithRetry(oldestMessage.message);
+      websocketMessagesToRetry.shift();
+    }
+
+    setTimeout(function(){
+      retrySendWebsocket();
+    }, 10000);
+  }
 }
 
 function deviceTime() {
-  var t = new Date(0); // The 0 there is the key, which sets the date to the epoch,
-  var devTime = Math.floor(utcSeconds + (config.ntp.timezone * 60 * 60));
-  t.setUTCSeconds(devTime);
-  document.getElementById("utc").innerHTML = t.toUTCString().slice(0, -3);
+  var t = new Date(utcSeconds * 1000); // milliseconds from epoch
+  document.getElementById("device-time").innerHTML = t.toString();
 }
 
 function syncBrowserTime() {
@@ -121,27 +144,46 @@ function syncBrowserTime() {
   var datatosend = {};
   datatosend.command = "settime";
   datatosend.epoch = timestamp;
-  websock.send(JSON.stringify(datatosend));
+  sendWebsocket(JSON.stringify(datatosend));
   $("#ntp").click();
 }
 
 function handleReader() {
   var rType = parseInt(document.getElementById("readertype").value);
-  if (rType === 0 || rType === 4) {
+  if (rType === 0) {
     document.getElementById("wiegandForm").style.display = "none";
     document.getElementById("mfrc522Form").style.display = "block";
     document.getElementById("rc522gain").style.display = "block";
-  } else if (rType === 1 || rType === 5) {
+    document.getElementById("rdm6300").style.display = "none";
+  } else if (rType === 1) {
     document.getElementById("wiegandForm").style.display = "block";
     document.getElementById("mfrc522Form").style.display = "none";
-  } else if (rType === 2 || rType === 6) {
+    document.getElementById("rdm6300").style.display = "none";
+  } else if (rType === 2) {
     document.getElementById("wiegandForm").style.display = "none";
     document.getElementById("mfrc522Form").style.display = "block";
     document.getElementById("rc522gain").style.display = "none";
+    document.getElementById("rdm6300").style.display = "none";
   } else if (rType === 3) {
     document.getElementById("wiegandForm").style.display = "none";
     document.getElementById("mfrc522Form").style.display = "none";
     document.getElementById("rc522gain").style.display = "none";
+    document.getElementById("rdm6300").style.display = "block";
+  } else if (rType === 4) {
+    document.getElementById("wiegandForm").style.display = "none";
+    document.getElementById("mfrc522Form").style.display = "block";
+    document.getElementById("rc522gain").style.display = "none";
+    document.getElementById("rdm6300").style.display = "block";
+  } else if (rType === 5) {
+    document.getElementById("wiegandForm").style.display = "block";
+    document.getElementById("mfrc522Form").style.display = "none";
+    document.getElementById("rc522gain").style.display = "none";
+    document.getElementById("rdm6300").style.display = "block";
+  } else if (rType === 6) {
+    document.getElementById("wiegandForm").style.display = "none";
+    document.getElementById("mfrc522Form").style.display = "block";
+    document.getElementById("rc522gain").style.display = "none";
+    document.getElementById("rdm6300").style.display = "block";
   }
 }
 
@@ -175,6 +217,7 @@ function listhardware() {
   document.getElementById("readertype").value = config.hardware.readertype;
   document.getElementById("wg0pin").value = config.hardware.wgd0pin;
   document.getElementById("wg1pin").value = config.hardware.wgd1pin;
+  document.getElementById("rdm6300pin").value = config.hardware.rdm6300pin;
   document.getElementById("gpioss").value = config.hardware.sspin;
   document.getElementById("gain").value = config.hardware.rfidgain;
   document.getElementById("gpiorly").value = config.hardware.rpin;
@@ -195,16 +238,15 @@ function listhardware() {
 }
 
 function listlog() {
-  websock.send("{\"command\":\"getlatestlog\", \"page\":" + page + ", \"filename\":\"" + theCurrentLogFile +"\"}");
+  sendWebsocket("{\"command\":\"getlatestlog\", \"page\":" + page + ", \"filename\":\"" + theCurrentLogFile +"\"}");
 }
 
 function listntp() {
-  websock.send("{\"command\":\"gettime\"}");
+  sendWebsocket("{\"command\":\"gettime\"}");
 
   document.getElementById("ntpserver").value = config.ntp.server;
   document.getElementById("intervals").value = config.ntp.interval;
-  document.getElementById("DropDownTimezone").value = config.ntp.timezone;
-  browserTime();
+  document.getElementById("DropDownTimezone").value = config.ntp.tzinfo;
   deviceTime();
 }
 
@@ -228,6 +270,7 @@ function savehardware() {
   config.hardware.readertype = parseInt(document.getElementById("readertype").value);
   config.hardware.wgd0pin = parseInt(document.getElementById("wg0pin").value);
   config.hardware.wgd1pin = parseInt(document.getElementById("wg1pin").value);
+  config.hardware.rdm6300pin = parseInt(document.getElementById("rdm6300pin").value);
   config.hardware.useridstoragemode = document.getElementById("useridstoragemode").value;
   config.hardware.requirepincodeafterrfid = document.getElementById("requirepincodeafterrfid").checked;
   config.hardware.allowpincodeonly = document.getElementById("allowpincodeonly").checked;
@@ -263,7 +306,7 @@ function savehardware() {
 function saventp() {
   config.ntp.server = document.getElementById("ntpserver").value;
   config.ntp.interval = parseInt(document.getElementById("intervals").value);
-  config.ntp.timezone = parseInt(document.getElementById("DropDownTimezone").value);
+  config.ntp.tzinfo = document.getElementById("DropDownTimezone").value;
 
   uncommited();
 }
@@ -440,13 +483,13 @@ function inProgress(callback) {
           });
           break;
         case "commit":
-          websock.send(JSON.stringify(config));
+          sendWebsocket(JSON.stringify(config));
           break;
         case "destroy":
-          websock.send("{\"command\":\"destroy\"}");
+          sendWebsocket("{\"command\":\"destroy\"}");
           break;
         case "restart":
-          websock.send("{\"command\":\"restart\"}");
+          sendWebsocket("{\"command\":\"restart\"}");
           break;
         default:
           break;
@@ -592,7 +635,7 @@ function listmqtt() {
     document.getElementById("mqttautotopic").checked = config.mqtt.autotopic;
     document.getElementById("mqttuser").value = config.mqtt.user;
     document.getElementById("mqttpwd").value = config.mqtt.pswd;
-    document.getElementById("syncrate").value = config.mqtt.syncrate;
+    document.getElementById("syncrate").value = config.mqtt.syncrate || 180;
     if (config.mqtt.mqttlog === 1) {
         $("input[name=\"mqttlog\"][value=\"1\"]").prop("checked", true);
     }
@@ -603,7 +646,7 @@ function listmqtt() {
 }
 
 function getFileList() {
-    websock.send("{\"command\":\"listfiles\", \"page\":" + page + "}");
+    sendWebsocket("{\"command\":\"listfiles\", \"page\":" + page + "}");
 }
 
 function listBSSID() {
@@ -627,7 +670,7 @@ function listSSID(obj) {
 }
 
 function scanWifi() {
-  websock.send("{\"command\":\"scan\"}");
+  sendWebsocket("{\"command\":\"scan\"}");
   document.getElementById("scanb").innerHTML = "...";
   document.getElementById("inputtohide").style.display = "none";
   var node = document.getElementById("ssid");
@@ -638,11 +681,11 @@ function scanWifi() {
 }
 
 function getUsers() {
-  websock.send("{\"command\":\"userlist\", \"page\":" + page + "}");
+  sendWebsocketWithRetry("{\"command\":\"userlist\", \"page\":" + page + "}");
 }
 
 function getEvents() {
-  websock.send("{\"command\":\"geteventlog\", \"page\":" + page + ", \"filename\":\"" + theCurrentLogFile +"\"}");
+  sendWebsocketWithRetry("{\"command\":\"geteventlog\", \"page\":" + page + ", \"filename\":\"" + theCurrentLogFile +"\"}");
 }
 
 function isVisible(e) {
@@ -671,6 +714,8 @@ function getnextpage(mode) {
     document.getElementById("loadpages").innerHTML = "Loading " + page + "/" + haspages;
   }
 
+  // check received previous page
+
   if (page < haspages) {
     page = page + 1;
     var commandtosend = {};
@@ -679,7 +724,9 @@ function getnextpage(mode) {
     if ((mode === "geteventlog") || (mode === "getlatestlog")) { 
       commandtosend.filename = theCurrentLogFile;
     }
-    websock.send(JSON.stringify(commandtosend));
+    sendWebsocketWithRetry(JSON.stringify(commandtosend));
+  } else if (page == haspages) {
+    backupstarted = false;
   }
 }
 
@@ -688,7 +735,7 @@ function builddata(obj) {
 }
 
 function testRelay(xnum) {
-  websock.send("{\"command\":\"testrelay" + xnum + "\"}");
+  sendWebsocket("{\"command\":\"testrelay" + xnum + "\"}");
 }
 
 function colorStatusbar(ref) {
@@ -702,7 +749,15 @@ function colorStatusbar(ref) {
   }
 }
 
+function removeModal() {
+  $("#restoremodal").modal("hide");
+  $("body").removeClass("modal-open");
+  $("body").css("padding-right", "0px");
+  $(".modal-backdrop").remove();
+}
+
 function listStats() {
+  removeModal();
   version = ajaxobj.version;
   document.getElementById("chip").innerHTML = ajaxobj.chipid;
   document.getElementById("cpu").innerHTML = ajaxobj.cpu + " Mhz";
@@ -723,6 +778,8 @@ function listStats() {
   document.getElementById("dns").innerHTML = ajaxobj.dns;
   document.getElementById("mac").innerHTML = ajaxobj.mac;
   document.getElementById("sver").innerText = version;
+  document.getElementById("systemname").innerHTML = ajaxobj.hostname;
+  document.getElementById("systemnamedevice").innerHTML = ajaxobj.hostname;
   $("#mainver").text(version);
 }
 
@@ -790,7 +847,7 @@ function backupuser() {
   var commandtosend = {};
   commandtosend.command = "userlist";
   commandtosend.page = page;
-  websock.send(JSON.stringify(commandtosend));
+  sendWebsocketWithRetry(JSON.stringify(commandtosend));
 }
 
 function backupset() {
@@ -841,7 +898,7 @@ function restore1by1(i, len, data) {
   datatosend.acctype = data[i].acctype;
   datatosend.validsince = data[i].validsince;
   datatosend.validuntil = data[i].validuntil;
-  websock.send(JSON.stringify(datatosend));
+  sendWebsocketWithRetry(JSON.stringify(datatosend));
   slot++;
   if (slot === len) {
     document.getElementById("dynamic").className = "progress-bar progress-bar-success";
@@ -850,6 +907,7 @@ function restore1by1(i, len, data) {
     restorestarted = false;
     completed = true;
     slot = 0;
+    recordstorestore = 0;
     document.getElementById("restoreclose").style.display = "block";
   }
 }
@@ -875,6 +933,7 @@ function restoreUser() {
             recordstorestore = json.list.length;
             data = json.list;
             restorestarted = true;
+            completed = false;
             $("#restoremodal").modal({
               backdrop: "static",
               keyboard: false
@@ -897,7 +956,7 @@ function twoDigits(value) {
 
 function initFileListTable() {
   jQuery(function($) {
-    window.FooTable.init("#spifftable", {
+    ft = window.FooTable.init("#spifftable", {
       columns: [{
           "name": "filename",
           "title": "File Name",
@@ -982,11 +1041,11 @@ function initFileListTable() {
     });
     function rollover(e)
     { 
-      websock.send("{\"command\":\"logMaintenance\" , \"action\":\"rollover\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
+      sendWebsocket("{\"command\":\"logMaintenance\" , \"action\":\"rollover\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
     }
     function splitfile(e)
     { 
-      websock.send("{\"command\":\"logMaintenance\" , \"action\":\"split\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
+      sendWebsocket("{\"command\":\"logMaintenance\" , \"action\":\"split\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
     }
     function viewfile(e)
     { 
@@ -1005,12 +1064,10 @@ function initFileListTable() {
     { 
       if (confirm("Really delete " + this.getAttribute('filename') + " ? This can not be undone!"))
       {
-        websock.send("{\"command\":\"logMaintenance\" , \"action\":\"delete\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
+        sendWebsocket("{\"command\":\"logMaintenance\" , \"action\":\"delete\", \"filename\":\"" + this.getAttribute('filename') + "\"}");
       }
     }
   });
-
-
 }
 
 function initEventTable() {
@@ -1019,14 +1076,15 @@ function initEventTable() {
     newlist[i] = {};
     newlist[i].options = {};
     newlist[i].value = {};
-    newlist[i].value = dup;
+    var dup = {};
     try {
-      var dup = JSON.parse(data[i]);
+      dup = JSON.parse(data[i]);
       dup.uid = i;
     } catch(e)
     {
-      var dup = {"uid":i,"type":"ERRO","src":"WEBIF","desc":"Error in logfile entry","data":data[i],"time":1}
+      dup = {"uid":i,"type":"ERRO","src":"WEBIF","desc":"Error in logfile entry","data":data[i],"time":1}
     }
+    newlist[i].value = dup;
     var c = dup.type;
     switch (c) {
       case "WARN":
@@ -1044,7 +1102,7 @@ function initEventTable() {
 
   }
   jQuery(function($) {
-    window.FooTable.init("#eventtable", {
+    ft = window.FooTable.init("#eventtable", {
       columns: [{
           "name": "uid",
           "title": "ID",
@@ -1111,30 +1169,20 @@ function initLatestLogTable() {
       var dup = {"uid":0,"acctype":99,"timestamp":0,"username":"Error in logfile entry"}
     }
     newlist[i].value = dup;
-    var c = dup.acctype;
+    var c = dup.access;
     switch (c) {
       case 1:
         newlist[i].options.classes = "success";
         break;
-      case 2:
-        newlist[i].options.classes = "warning";
-        break;
-      case 99:
-        newlist[i].options.classes = "info";
-        break;
       case 0:
-        newlist[i].options.classes = "warning";
-        break;
-      case 98:
         newlist[i].options.classes = "danger";
         break;
       default:
         break;
     }
-
   }
   jQuery(function($) {
-    window.FooTable.init("#latestlogtable", {
+    ft = window.FooTable.init("#latestlogtable", {
       columns: [{
           "name": "timestamp",
           "title": "Date",
@@ -1165,11 +1213,11 @@ function initLatestLogTable() {
         },
         {
           "name": "acctype",
-          "title": "Access",
+          "title": "Role",
           "breakpoints": "xs sm",
           "parser": function(value) {
             if (value === 1) {
-              return "Granted";
+              return "Always";
             } else if (value === 99) {
               return "Admin";
             } else if (value === 0) {
@@ -1178,6 +1226,20 @@ function initLatestLogTable() {
               return "Unknown";
             } else if (value === 2) {
               return "Expired";
+            }
+          }
+        },
+        {
+          "name": "access",
+          "title": "Access",
+          "breakpoints": "xs sm",
+          "parser": function(value) {
+            if (value === 1) {
+              return "Granted";
+            } else if (value === 0) {
+              return "Denied";
+            } else {
+              return "Unknown";
             }
           }
         }
@@ -1278,10 +1340,14 @@ function initUserTable() {
             "title": "Valid Since",
             "breakpoints": "xs sm",
             "parser": function(value) {
-              console.log(value)
               var comp = new Date();
-              value = Math.floor(value + ((comp.getTimezoneOffset() * 60) * -1));
-              var vuepoch = new Date(value * 1000);
+              var vuepoch;
+              if (value) {
+                value = Math.floor(value + ((comp.getTimezoneOffset() * 60) * -1));
+                vuepoch = new Date(value * 1000);
+              } else {
+                vuepoch = new Date(0);
+              }
               var formatted = vuepoch.getFullYear() +
                 "-" + twoDigits(vuepoch.getMonth() + 1) +
                 "-" + twoDigits(vuepoch.getDate());
@@ -1344,10 +1410,13 @@ function initUserTable() {
             var username = row.value.username;
             if (confirm("This will remove " + uid + " : " + username + " from database. Are you sure?")) {
               var jsontosend = "{\"uid\":\"" + uid + "\",\"command\":\"remove\"}";
-              websock.send(jsontosend);
+              sendWebsocket(jsontosend);
               row.delete();
             }
           }
+        },
+        paging: {
+          size: 10
         },
         components: {
           filtering: window.FooTable.MyFiltering
@@ -1371,7 +1440,6 @@ function initUserTable() {
           validsince: (new Date($editor.find("#validsince").val()).getTime() / 1000),
           validuntil: (new Date($editor.find("#validuntil").val()).getTime() / 1000)
         };
-      console.log(values.validuntil);
       if (row instanceof window.FooTable.Row) {
         row.delete();
         values.id = uid++;
@@ -1395,19 +1463,16 @@ function initUserTable() {
       var validuntil = $editor.find("#validuntil").val();
       var vuepoch = (new Date(validuntil).getTime() / 1000);
       datatosend.validuntil = vuepoch;
-      websock.send(JSON.stringify(datatosend));
+      sendWebsocket(JSON.stringify(datatosend));
       $modal.modal("hide");
     });
   });
 
-  ft=FooTable.get('#usertable');
-  
-
+  ft = FooTable.get('#usertable');
   for (var i=2; i<= maxNumRelays; i++)
   {
     if (i<= numRelays) 
     {
-      //FooTable.get('#usertable').draw();
       ft.columns.get("acctype"+i).visible=true;
     }
     else
@@ -1470,9 +1535,8 @@ function socketMessageListener(evt) {
           }
           builddata(obj);
           break;
-        case "gettime":
+      case "gettime":
         utcSeconds = obj.epoch;
-        timezone = obj.timezone;
         deviceTime();
         break;
       case "piccscan":
@@ -1488,6 +1552,12 @@ function socketMessageListener(evt) {
         if (!('maxOpenDoorTime' in config.hardware)) config.hardware.maxOpenDoorTime = 0;
         if (!('doorbellpin' in config.hardware)) config.hardware.doorbellpin = 255;
         if (!('accessdeniedpin' in config.hardware)) config.hardware.accessdeniedpin = 255;
+        if (!('openlockpin' in config.hardware)) config.hardware.openlockpin = 255;
+        if (!('beeperpin' in config.hardware)) config.hardware.beeperpin = 255;
+        if (!('ledwaitingpin' in config.hardware)) config.hardware.ledwaitingpin = 255;
+        if (!('ltype' in config.hardware)) config.hardware.ltype = 0;
+        if (!('useridstoragemode' in config.hardware)) config.hardware.useridstoragemode = "hexadecimal";
+        if (!('removeparitybits' in config.hardware)) config.hardware.removeparitybits = true;
         if ('numrelays' in config.hardware) numRelays = config.hardware["numrelays"]; else config.hardware["numrelays"] = numRelays;
         break;
       default:
@@ -1495,8 +1565,7 @@ function socketMessageListener(evt) {
     }
   }
   if (obj.hasOwnProperty("resultof")) {
-
-
+    websocketMessagesToRetry.shift();
     switch (obj.resultof) {
       case "latestlog":
         if (obj.result === false) {
@@ -1525,8 +1594,8 @@ function socketMessageListener(evt) {
         }
         break;
       case "eventlist":
-        document.getElementById("saveeventlogbtn").disabled=true; 
-        document.getElementById("cleareventlogbtn").disabled=true; 
+        document.getElementById("saveeventlogbtn").disabled=true;
+        document.getElementById("cleareventlogbtn").disabled=true;
         if (page < haspages && obj.result === true) {
           getnextpage("geteventlog");
         } else if (page === haspages) {
@@ -1534,10 +1603,9 @@ function socketMessageListener(evt) {
           document.getElementById("saveeventlogbtn").disabled=false;
           // only enable delete button for main event log
           // others need to be done from the maintenance section
-          if (theCurrentLogFile === "/eventlog.json")
-          {
-            document.getElementById("cleareventlogbtn").disabled=false; 
-          } 
+          if (theCurrentLogFile === "/eventlog.json") {
+            document.getElementById("cleareventlogbtn").disabled=false;
+          }
           document.getElementById("loading-img").style.display = "none";
         }
         break;
@@ -1556,48 +1624,45 @@ function socketMessageListener(evt) {
           document.getElementById("loading-img").style.display = "none";
         }
         break;
-        case "listfiles":
-          if (page < haspages && obj.result === true) {
-            getnextpage("listfiles");
-          } else if (page === haspages) {
-            initFileListTable();
-            document.getElementById("loading-img").style.display = "none";
-          }
-          break;
-        case "logfileMaintenance":
-          if (obj.result === false) 
+      case "listfiles":
+        if (page < haspages && obj.result === true) {
+          getnextpage("listfiles");
+        } else if (page === haspages) {
+          initFileListTable();
+          document.getElementById("loading-img").style.display = "none";
+        }
+        break;
+      case "logfileMaintenance":
+        if (obj.result === false) 
+        {
+          if (obj.hasOwnProperty("message"))
           {
-            if (obj.hasOwnProperty("message"))
-            {
-              alert (obj.message);
-            } else 
-            {
-              alert ("Operation failed")
-            }
-          } else
+            alert (obj.message);
+          } else 
           {
-            $("#logmaintenance").click();
+            alert ("Operation failed")
           }
-          break;
-        case "userfile":
+        } else
+        {
+          $("#logmaintenance").click();
+        }
+        break;
+      case "userfile":
         if (restorestarted) {
           if (!completed && obj.result === true) {
             restore1by1(slot, recordstorestore, data);
           }
         }
         break;
-
-
       default:
         break;
     }
   }
-
 }
 
 function clearevent() {
   if (confirm('Deleting the Event log file can not be undone - delete ?')) {
-    websock.send("{\"command\":\"clearevent\"}");
+    sendWebsocket("{\"command\":\"clearevent\"}");
     $("#eventlog").click();
   }
 }
@@ -1624,7 +1689,7 @@ function savelatest() {
 
 function clearlatest() {
   if (confirm('Deleting the Access log file can not be undone - delete ?')) {
-    websock.send("{\"command\":\"clearlatest\"}");
+    sendWebsocket("{\"command\":\"clearlatest\"}");
     $("#latestlog").click();
   }
 }
@@ -1710,6 +1775,8 @@ function updateUserModalForm(){
         str=str.replace ("<option value=\"99\">Admin</option>", "");
         cloneObj.innerHTML=str;
         accParent[0].appendChild(cloneObj);
+        var rname = config.hardware["relay"+i]?.doorname || "Relay "+i;
+        $("#useracctype"+i+" label").text("Access to " + rname);
       }
     } else {
       var removeAccForm = document.getElementById("useracctype" + i);
@@ -1746,7 +1813,7 @@ $("#sidebarCollapse").on("click", function() {
 });
 
 $("#status").click(function() {
-  websock.send("{\"command\":\"status\"}");
+  sendWebsocket("{\"command\":\"status\"}");
   return false;
 });
 
@@ -1914,8 +1981,12 @@ function logout() {
 
 function wsConnectionActive() {
   wsConnectionPresent = true;
-  websock.send("{\"command\":\"status\"}");
   $("#ws-connection-status").slideUp();
+  if (!gotInitialData) {
+    sendWebsocket("{\"command\":\"status\"}");
+    sendWebsocket("{\"command\":\"getconf\"}");
+    gotInitialData = true;
+  }
 }
 
 function wsConnectionClosed() {
@@ -1945,10 +2016,6 @@ function connectWS() {
   websock.addEventListener("message", socketMessageListener);
 
   websock.onopen = function(evt) {
-    if (!gotInitialData) {
-      websock.send("{\"command\":\"getconf\"}");
-      gotInitialData = true;
-    }
     wsConnectionActive();
   };
 

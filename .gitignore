@@ -3,6 +3,7 @@
 
 # platformio
 
+.pio
 .pioenvs
 .piolibdeps
 .clang_complete
@@ -14,6 +15,7 @@ src/websrc/css/required.css
 src/websrc/js/required.js
 src/websrc/fonts
 src/websrc/gzipped
+src/websrc/process
 
 bin/generic.bin
 bin/forV2Board.bin

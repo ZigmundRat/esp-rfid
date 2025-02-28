@@ -17,7 +17,7 @@
 
 #define ACCESS_GRANTED 1
 #define ACCESS_ADMIN 99
-#define ACCCESS_DENIED 0
+#define ACCESS_DENIED 0
 
 // Reader defines
 
@@ -25,6 +25,9 @@
 #define WIEGANDTYPE_KEYPRESS8 8
 #define WIEGANDTYPE_PICC24 24
 #define WIEGANDTYPE_PICC34 34
+
+#define RDM6300_BAUDRATE 9600
+#define RDM6300_READ_TIMEOUT 20
 
 // hardware defines
 

@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
-#define VERSION "2.0.0-dev.1"
+#define VERSION "2.0.0"
 
 #include "Arduino.h"
 #include <ESP8266WiFi.h>
@@ -34,7 +34,7 @@ SOFTWARE.
 #include <ESPAsyncWebServer.h>
 #include <TimeLib.h>
 #include <Ticker.h>
-#include "Ntp.h"
+#include <time.h>
 #include <AsyncMqttClient.h>
 #include <Bounce2.h>
 #include "magicnumbers.h"
@@ -46,11 +46,13 @@ Config config;
 #include "PN532.h"
 #include <Wiegand.h>
 #include "rfid125kHz.h"
+#include <SoftwareSerial.h>
 
 MFRC522 mfrc522 = MFRC522();
 PN532 pn532;
 WIEGAND wg;
 RFID_Reader RFIDr;
+SoftwareSerial *rdm6300SwSerial = NULL;
 
 // relay specific variables
 bool activateRelay[MAX_NUM_RELAYS] = {false, false, false, false};
@@ -66,10 +68,10 @@ bool deactivateRelay[MAX_NUM_RELAYS] = {false, false, false, false};
 #include "webh/esprfid.htm.gz.h"
 #include "webh/index.html.gz.h"
 
-NtpClient NTP;
 AsyncMqttClient mqttClient;
 Ticker mqttReconnectTimer;
 Ticker wifiReconnectTimer;
+Ticker wsMessageTicker;
 WiFiEventHandler wifiDisconnectHandler, wifiConnectHandler, wifiOnStationModeGotIPHandler;
 Bounce openLockButton;
 
@@ -94,10 +96,14 @@ uint8_t lastDoorbellState = 0;
 uint8_t lastDoorState = 0;
 uint8_t lastTamperState = 0;
 unsigned long nextbeat = 0;
+time_t epoch;
+time_t lastNTPepoch;
+unsigned long lastNTPSync = 0;
 unsigned long openDoorMillis = 0;
 unsigned long previousLoopMillis = 0;
 unsigned long previousMillis = 0;
 bool shouldReboot = false;
+tm timeinfo;
 unsigned long uptimeSeconds = 0;
 unsigned long wifiPinBlink = millis();
 unsigned long wiFiUptimeMillis = 0;
@@ -173,14 +179,16 @@ void ICACHE_RAM_ATTR loop()
 {
 	currentMillis = millis();
 	deltaTime = currentMillis - previousLoopMillis;
-	uptimeSeconds = NTP.getUptimeSec();
+	uptimeSeconds = currentMillis / 1000;
 	previousLoopMillis = currentMillis;
+	
+	trySyncNTPtime(10);
 
 	openLockButton.update();
 	if (config.openlockpin != 255 && openLockButton.fell())
 	{
 		writeLatest(" ", "Button", 1);
-		mqttPublishAccess(now(), "true", "Always", "Button", " ");
+		mqttPublishAccess(epoch, "true", "Always", "Button", " ", " ");
 		activateRelay[0] = true;
 		beeperValidAccess();
 		// TODO: handle other relays
@@ -294,7 +302,7 @@ void ICACHE_RAM_ATTR loop()
 	}
 
 	// don't try connecting to WiFi when waiting for pincode
-	if (doEnableWifi == true && keyTimer == 0)
+	if (doEnableWifi == true && keyTimer == 0 && activateRelay[0] == true)
 	{
 		if (!WiFi.isConnected())
 		{
@@ -306,10 +314,10 @@ void ICACHE_RAM_ATTR loop()
 
 	if (config.mqttEnabled && mqttClient.connected())
 	{
-		if ((unsigned)now() > nextbeat)
+		if ((unsigned)epoch > nextbeat)
 		{
-			mqttPublishHeartbeat(now(), uptimeSeconds);
-			nextbeat = (unsigned)now() + config.mqttInterval;
+			mqttPublishHeartbeat(epoch, uptimeSeconds);
+			nextbeat = (unsigned)epoch + config.mqttInterval;
 #ifdef DEBUG
 			Serial.print("[ INFO ] Nextbeat=");
 			Serial.println(nextbeat);
@@ -317,4 +325,9 @@ void ICACHE_RAM_ATTR loop()
 		}
 		processMqttQueue();
 	}
+
+	processWsQueue();
+
+	// clean unused websockets
+	ws.cleanupClients();
 }
